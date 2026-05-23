@@ -71,8 +71,8 @@ export class Conductor {
     await this.ensureRepo();
 
     const now = new Date();
-    const dateStr = now.toISOString().slice(0, 16).replace('T', '-');
-    this.sessionId = `session/${dateStr}`;
+    const dateStr = now.toISOString().slice(0, 16).replace('T', '-').replace(':', '-');
+    this.sessionId = `session-${dateStr}`;
     await this.git.createSessionBranch(this.sessionId);
 
     const modelConfigPath = path.join(this.workspacePath, '.triad', 'model_config.json');
