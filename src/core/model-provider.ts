@@ -5,16 +5,21 @@ import * as dotenv from 'dotenv';
 
 dotenv.config({ override: true });
 
-const OPENCODE_CONFIG_PATH = 'C:/.opencode/opencode.json';
+const OPENCODE_CONFIG_PATHS = [
+  'C:/.opencode/opencode.json',
+  path.join(process.env.USERPROFILE || 'C:', '.config', 'opencode', 'opencode.json')
+];
 let opencodeConfig: any = {};
-if (fs.existsSync(OPENCODE_CONFIG_PATH)) {
-  opencodeConfig = JSON.parse(fs.readFileSync(OPENCODE_CONFIG_PATH, 'utf-8'));
+for (const p of OPENCODE_CONFIG_PATHS) {
+  if (fs.existsSync(p)) {
+    try { opencodeConfig = JSON.parse(fs.readFileSync(p, 'utf-8')); break; } catch (e) {}
+  }
 }
 
 const KEYS: Record<string, string | undefined> = {
   OPENROUTER: process.env.OPENROUTER_API_KEY || opencodeConfig.provider?.openrouter?.apiKey || opencodeConfig.provider?.['openrouter-stealth']?.apiKey,
   OPENCODE: process.env.OPENCODE_API_KEY || opencodeConfig.provider?.opencode?.apiKey || opencodeConfig.provider?.['zen-free']?.apiKey,
-  DEEPSEEK: process.env.DEEPSEEK_API_KEY
+  DEEPSEEK: process.env.DEEPSEEK_API_KEY || opencodeConfig.provider?.deepseek?.apiKey
 };
 
 console.log(`[KEYS] OPENROUTER=${KEYS.OPENROUTER ? 'set (' + KEYS.OPENROUTER.substring(0, 12) + '...)' : 'MISSING'}`);
