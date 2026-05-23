@@ -135,12 +135,12 @@ export interface Checkpoint {
 export const DEFAULT_MODEL_CONFIG: ProjectModelConfig = {
   architect: {
     cli: 'opencode',
-    provider: 'deepseek',
-    model: 'deepseek-v4-pro',
+    provider: 'openrouter',
+    model: 'deepseek/deepseek-chat:free',
     fallback: {
       cli: 'opencode',
-      provider: 'openrouter',
-      model: 'openai/gpt-oss-120b:free'
+      provider: 'opencode',
+      model: 'deepseek-v4-flash-free'
     }
   },
   builder: {
@@ -149,8 +149,8 @@ export const DEFAULT_MODEL_CONFIG: ProjectModelConfig = {
     model: 'deepseek-v4-flash-free',
     fallback: {
       cli: 'opencode',
-      provider: 'deepseek',
-      model: 'deepseek-chat'
+      provider: 'openrouter',
+      model: 'deepseek/deepseek-chat:free'
     }
   },
   reviewer: {
@@ -158,17 +158,19 @@ export const DEFAULT_MODEL_CONFIG: ProjectModelConfig = {
     provider: 'openrouter',
     model: 'meta-llama/llama-3.3-70b-instruct:free',
     fallback: {
-      cli: 'gemini',
-      model: 'gemini-2.0-flash'
+      cli: 'opencode',
+      provider: 'opencode',
+      model: 'deepseek-v4-flash-free'
     }
   },
   auditor: {
-    cli: 'gemini',
-    model: 'gemini-2.0-flash',
+    cli: 'opencode',
+    provider: 'openrouter',
+    model: 'meta-llama/llama-3.3-70b-instruct:free',
     fallback: {
       cli: 'opencode',
-      provider: 'openrouter',
-      model: 'nousresearch/hermes-3-llama-3.1-405b:free'
+      provider: 'opencode',
+      model: 'deepseek-v4-flash-free'
     }
   }
 };

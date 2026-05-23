@@ -15,9 +15,29 @@ export class CLISpawner {
   private ptys: Map<AgentRole, pty.IPty> = new Map();
   private outputs: Map<AgentRole, string> = new Map();
   private broadcast: BroadcastFn | null = null;
+  private lastActivity: Map<AgentRole, number> = new Map();
+  private watchdogInterval: NodeJS.Timeout | null = null;
 
   constructor(workspacePath: string) {
     this.workspacePath = workspacePath;
+    this.startWatchdog();
+  }
+
+  private startWatchdog(): void {
+    this.watchdogInterval = setInterval(() => {
+      const now = Date.now();
+      this.ptys.forEach((_, role) => {
+        const last = this.lastActivity.get(role) || now;
+        if (now - last > 120000) { // 2 min no output = stuck
+          console.error(`[CLISpawner] Watchdog: ${role} stuck (no output for ${((now - last)/1000).toFixed(0)}s)`);
+          this.kill(role);
+        }
+      });
+    }, 15000);
+  }
+
+  private stopWatchdog(): void {
+    if (this.watchdogInterval) { clearInterval(this.watchdogInterval); this.watchdogInterval = null; }
   }
 
   setBroadcast(fn: BroadcastFn): void {
@@ -59,8 +79,10 @@ export class CLISpawner {
     });
 
     this.outputs.set(role, '');
+    this.lastActivity.set(role, Date.now());
 
     ptyProcess.onData((data) => {
+      this.lastActivity.set(role, Date.now());
       const current = this.outputs.get(role) || '';
       this.outputs.set(role, current + data);
       if (this.broadcast) {
@@ -68,9 +90,15 @@ export class CLISpawner {
       }
     });
 
+    ptyProcess.onExit(({ exitCode, signal }) => {
+      console.log(`[CLISpawner] ${role} exited (code=${exitCode} signal=${signal})`);
+      this.lastActivity.set(role, 0);
+    });
+
     setTimeout(() => {
+      if (!this.ptys.has(role)) return;
       ptyProcess.write(promptContent + '\n');
-    }, 800);
+    }, 1500);
 
     this.ptys.set(role, ptyProcess);
     return ptyProcess;
@@ -99,8 +127,10 @@ export class CLISpawner {
     });
 
     this.outputs.set(role, '');
+    this.lastActivity.set(role, Date.now());
 
     ptyProcess.onData((data) => {
+      this.lastActivity.set(role, Date.now());
       const current = this.outputs.get(role) || '';
       this.outputs.set(role, current + data);
       if (this.broadcast) {
@@ -108,9 +138,15 @@ export class CLISpawner {
       }
     });
 
+    ptyProcess.onExit(({ exitCode, signal }) => {
+      console.log(`[CLISpawner] ${role} exited (code=${exitCode} signal=${signal})`);
+      this.lastActivity.set(role, 0);
+    });
+
     setTimeout(() => {
+      if (!this.ptys.has(role)) return;
       ptyProcess.write(promptContent + '\n');
-    }, 800);
+    }, 1500);
 
     this.ptys.set(role, ptyProcess);
     return ptyProcess;
@@ -140,6 +176,7 @@ export class CLISpawner {
   }
 
   killAll(): void {
+    this.stopWatchdog();
     this.ptys.forEach((p) => {
       try { p.kill(); } catch (e) {}
     });

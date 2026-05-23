@@ -12,8 +12,8 @@ if (fs.existsSync(OPENCODE_CONFIG_PATH)) {
 }
 
 const KEYS: Record<string, string | undefined> = {
-  OPENROUTER: process.env.OPENROUTER_API_KEY || opencodeConfig.provider?.openrouter?.apiKey,
-  OPENCODE: process.env.OPENCODE_API_KEY || opencodeConfig.provider?.opencode?.apiKey,
+  OPENROUTER: process.env.OPENROUTER_API_KEY || opencodeConfig.provider?.openrouter?.apiKey || opencodeConfig.provider?.['openrouter-stealth']?.apiKey,
+  OPENCODE: process.env.OPENCODE_API_KEY || opencodeConfig.provider?.opencode?.apiKey || opencodeConfig.provider?.['zen-free']?.apiKey,
   DEEPSEEK: process.env.DEEPSEEK_API_KEY
 };
 
@@ -28,11 +28,11 @@ const PROVIDERS = {
 };
 
 export const Models = {
-  ARCHITECT_PRIMARY: { provider: 'DEEPSEEK', name: 'deepseek-v4-pro' },
-  ARCHITECT_FALLBACK: { provider: 'OPENROUTER', name: 'openai/gpt-oss-120b:free' },
+  ARCHITECT_PRIMARY: { provider: 'OPENROUTER', name: 'deepseek/deepseek-chat:free' },
+  ARCHITECT_FALLBACK: { provider: 'OPENCODE', name: 'deepseek-v4-flash-free' },
   BUILDER: { provider: 'OPENCODE', name: 'deepseek-v4-flash-free' },
   REVIEWER: { provider: 'OPENROUTER', name: 'meta-llama/llama-3.3-70b-instruct:free' },
-  AUDITOR: { provider: 'OPENROUTER', name: 'nousresearch/hermes-3-llama-3.1-405b:free' },
+  AUDITOR: { provider: 'OPENROUTER', name: 'meta-llama/llama-3.3-70b-instruct:free' },
 };
 
 export type ModelRole = keyof typeof Models;
