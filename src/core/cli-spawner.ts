@@ -38,11 +38,19 @@ export class CLISpawner {
     };
     fs.writeFileSync(path.join(triadDir, configFile), JSON.stringify(config, null, 2));
 
-    const opencodePath = process.env.LOCALAPPDATA
-      ? path.join(process.env.LOCALAPPDATA, 'npm', 'node_modules', 'opencode-ai', 'bin', 'opencode.exe')
-      : 'opencode';
-    const cmd = process.platform === 'win32' && fs.existsSync(opencodePath) ? opencodePath : 'opencode';
-    const ptyProcess = pty.spawn(cmd, [], {
+    const npmDir = process.env.APPDATA
+      ? path.join(process.env.APPDATA, 'npm')
+      : '';
+    const opencodePath = npmDir ? path.join(npmDir, 'node_modules', 'opencode-ai', 'bin', 'opencode.exe') : '';
+    const opencodeShell = npmDir ? path.join(npmDir, 'opencode.cmd') : '';
+    const spawnCmd =
+      process.platform === 'win32' && fs.existsSync(opencodePath) ? opencodePath :
+      process.platform === 'win32' && fs.existsSync(opencodeShell) ? 'cmd.exe' :
+      'opencode';
+    const spawnArgs =
+      spawnCmd === 'cmd.exe' ? ['/c', opencodeShell] :
+      [];
+    const ptyProcess = pty.spawn(spawnCmd, spawnArgs, {
       name: 'xterm-color',
       cols: 120,
       rows: 30,
@@ -69,11 +77,19 @@ export class CLISpawner {
   }
 
   spawnGemini(role: AgentRole, promptContent: string): pty.IPty {
-    const geminiPath = process.env.LOCALAPPDATA
-      ? path.join(process.env.LOCALAPPDATA, 'npm', 'node_modules', '@google', 'gemini-cli', 'bundle', 'gemini.js')
+    const npmDir = process.env.APPDATA
+      ? path.join(process.env.APPDATA, 'npm')
       : '';
-    const cmd = process.platform === 'win32' && fs.existsSync(geminiPath) ? process.execPath : 'gemini';
-    const args = process.platform === 'win32' && fs.existsSync(geminiPath) ? [geminiPath] : [];
+    const geminiPath = npmDir
+      ? path.join(npmDir, 'node_modules', '@google', 'gemini-cli', 'bundle', 'gemini.js')
+      : '';
+    const geminiShell = npmDir ? path.join(npmDir, 'gemini.cmd') : '';
+    const cmd = process.platform === 'win32' && fs.existsSync(geminiPath) ? process.execPath :
+      process.platform === 'win32' && fs.existsSync(geminiShell) ? 'cmd.exe' :
+      'gemini';
+    const args = process.platform === 'win32' && fs.existsSync(geminiPath) ? [geminiPath] :
+      process.platform === 'win32' && fs.existsSync(geminiShell) ? ['/c', geminiShell] :
+      [];
     const ptyProcess = pty.spawn(cmd, args, {
       name: 'xterm-color',
       cols: 120,

@@ -42,7 +42,12 @@ export class GitManager {
   }
 
   async createSessionBranch(sessionId: string): Promise<string> {
-    await this.git.checkoutLocalBranch(sessionId);
+    const branches = await this.git.branchLocal();
+    if (branches.all.includes(sessionId)) {
+      await this.git.checkout(sessionId);
+    } else {
+      await this.git.checkoutLocalBranch(sessionId);
+    }
     return sessionId;
   }
 
