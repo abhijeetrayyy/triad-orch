@@ -95,13 +95,20 @@ export class Conductor {
     await this.saveState();
     await this.git.commit(`[${this.sessionId}] [system] session initialized`);
 
-    this.emit('conductor_started', { sessionId: this.sessionId, projectName: this.projectName });
-    // Periodic state broadcast for live dashboard updates
-    this.stateInterval = setInterval(() => this.emit('state_update', { ...this.getState(), projectName: this.projectName }), 2000);
-
-    // Start the async pipeline (no spawning, no file watching)
     this.status = 'planning';
-    await this.handlePlanning(intent);
+    this.emit('conductor_started', { sessionId: this.sessionId, projectName: this.projectName });
+    this.emit('state_update', { ...this.getState(), projectName: this.projectName });
+
+    // Periodic state broadcast for live dashboard updates
+    this.stateInterval = setInterval(() => this.emit('state_update', { ...this.getState(), projectName: this.projectName }), 1000);
+
+    // Run pipeline async — do NOT await, start() must return immediately
+    // so the IPC handler responds to the dashboard without blocking
+    setImmediate(() => this.handlePlanning(intent).catch(e => {
+      console.error('[Conductor] Pipeline error:', e.message);
+      this.status = 'failed';
+      this.emit('pipeline_failed', { projectName: this.projectName, reason: e.message });
+    }));
   }
 
   private stateInterval: NodeJS.Timeout | null = null;
@@ -158,6 +165,7 @@ export class Conductor {
   private async handlePlanning(intent: string): Promise<void> {
     console.log('[Conductor] Planning with Architect...');
     this.emit('agent_spawned', { role: 'architect' });
+    this.emit('state_update', { ...this.getState(), projectName: this.projectName });
 
     const workspaceMap = this.getWorkspaceMap();
     const memoryContext = this.memory.getRelevantLessons(intent);

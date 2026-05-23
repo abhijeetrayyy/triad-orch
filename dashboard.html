@@ -282,7 +282,7 @@
     else if(st==='executing'||st==='planning'||st==='reviewing'||st==='auditing'){document.getElementById('btnLaunch').style.display='none';document.getElementById('btnPause').style.display='';document.getElementById('btnPause').disabled=false;document.getElementById('btnResume').style.display='none';document.getElementById('btnKill').disabled=false;paused=false;closePanel()}
     else{document.getElementById('btnLaunch').style.display='';document.getElementById('btnPause').style.display='none';document.getElementById('btnResume').style.display='none';document.getElementById('btnKill').disabled=true;paused=false;closePanel()}
     renderBoard()}
-    function launchSession(){if(!activeProject)return;if(bridge)bridge.startProject(activeProject,document.getElementById('iIntent').value).then(r=>{if(r?.success){showToast('Engine started','success');dismissCheckpoint()}else showToast('Failed','error');setTimeout(fetchConductorState,1000)})}
+    function launchSession(){if(!activeProject)return;conductorState={status:'planning',project:activeProject,loop_count:0,task_queue:[],active_agents:[],current_task_id:null};updateConductorUI();if(bridge)bridge.startProject(activeProject,document.getElementById('iIntent').value).then(r=>{if(r?.success){showToast('Engine started','success');dismissCheckpoint()}else{showToast('Failed','error');conductorState=null;updateConductorUI()}setTimeout(fetchConductorState,1000)})}
     function killProject(){if(!activeProject||!bridge)return;bridge.stopProject(activeProject).then(()=>{showToast('Engine stopped','info');setTimeout(fetchConductorState,500)})}
     function pauseProject(){if(!activeProject||!bridge)return;bridge.pauseProject(activeProject).then(()=>{showToast('Paused','info');fetchConductorState()})}
     function resumeProject(){if(!activeProject||!bridge)return;bridge.resumeProject(activeProject,gatherModelConfig()).then(()=>{showToast('Resumed','success');fetchConductorState()})}
@@ -372,7 +372,7 @@
     if(event==='agent-output'&&data.project===activeProject){const clean=(data.data||'').replace(/\x1B\[[0-9;]*[a-zA-Z]/g,'').replace(/\r/g,'');if(!clean)return;agentOutputs[data.role]=(agentOutputs[data.role]||'')+clean;appendLog('[AGENT:'+data.role.toUpperCase()+'] '+clean.split('\n').pop())}
     if(event==='agent_spawned'){appendLog('[SYSTEM] Agent spawned: '+data.role+(data.taskId?' for task '+data.taskId:''))}
     if(event==='agent_timeout'){appendLog('[SYSTEM] Agent timed out: '+data.role)}
-    if(event==='conductor_started'){showToast('Engine launched','success');fetchConductorState()}
+    if(event==='conductor_started'){showToast('Engine launched','success');if(data?.projectName===activeProject){conductorState={...conductorState,status:'planning',project:data.projectName};updateConductorUI()}fetchConductorState()}
     if(event==='conductor_stopped'||event==='pipeline_failed'){showToast('Engine stopped','info');fetchConductorState()}
     if(event==='project_complete'){showToast('Complete!','success');fetchProjects();fetchConductorState()}
     if(event==='plan_ready'){appendLog('[SYSTEM] Plan ready — '+data.tasks?.length+' tasks');renderBoard();fetchProjects()}})}
