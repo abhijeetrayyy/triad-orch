@@ -366,8 +366,17 @@
     document.getElementById('dirBtnGenerate').disabled=false;document.getElementById('dirBtnGenerate').textContent='Generate Direction Prompt'}
     function copyDirectionResult(){if(dirResult?.generated){navigator.clipboard.writeText(dirResult.generated);showToast('Copied','success')}}
     async function applyDirectionResult(){if(!dirResult?.generated||!activeProject)return;const target=document.getElementById('dirTarget').value;if(target==='intent'){document.getElementById('iIntent').value=dirResult.generated;await saveIntent()}else if(target==='architect_prompt'){document.getElementById('iArchitect').value=dirResult.generated;await savePrompts()}else if(target==='builder_prompt'){document.getElementById('iBuilder').value=dirResult.generated;await savePrompts()};showToast('Applied','success');closeDirectionEngine()}
-    if(bridge){bridge.onConductorEvent(({event,data})=>{if(event==='state_update'&&data.projectName===activeProject){conductorState=data;updateConductorUI()}if(event==='conductor_started'){showToast('Engine launched','success');fetchConductorState()}if(event==='conductor_stopped'||event==='pipeline_failed'){showToast('Engine stopped','info');fetchConductorState()}if(event==='project_complete'){showToast('Complete!','success');fetchProjects();fetchConductorState()}if(event==='plan_ready'){renderBoard()}})}
-    connect();fetchAvailableModels();setInterval(()=>{if(activeProject&&bridge)fetchConductorState()},5000);
+    const agentOutputs={};AGENT_ROLES.forEach(r=>agentOutputs[r]='');
+    if(bridge){bridge.onConductorEvent(({event,data})=>{
+    if(event==='state_update'&&data.projectName===activeProject){conductorState=data;updateConductorUI()}
+    if(event==='agent-output'&&data.project===activeProject){const clean=(data.data||'').replace(/\x1B\[[0-9;]*[a-zA-Z]/g,'').replace(/\r/g,'');if(!clean)return;agentOutputs[data.role]=(agentOutputs[data.role]||'')+clean;appendLog('[AGENT:'+data.role.toUpperCase()+'] '+clean.split('\n').pop())}
+    if(event==='agent_spawned'){appendLog('[SYSTEM] Agent spawned: '+data.role+(data.taskId?' for task '+data.taskId:''))}
+    if(event==='agent_timeout'){appendLog('[SYSTEM] Agent timed out: '+data.role)}
+    if(event==='conductor_started'){showToast('Engine launched','success');fetchConductorState()}
+    if(event==='conductor_stopped'||event==='pipeline_failed'){showToast('Engine stopped','info');fetchConductorState()}
+    if(event==='project_complete'){showToast('Complete!','success');fetchProjects();fetchConductorState()}
+    if(event==='plan_ready'){appendLog('[SYSTEM] Plan ready — '+data.tasks?.length+' tasks');renderBoard();fetchProjects()}})}
+    connect();fetchAvailableModels();setInterval(()=>{if(activeProject&&bridge){fetchConductorState();bridge.getProjectState(activeProject).then(s=>{if(s){conductorState=s;updateConductorUI()}})}},3000);
     </script>
 </body>
 </html>

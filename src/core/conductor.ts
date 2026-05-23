@@ -98,10 +98,15 @@ export class Conductor {
     this.status = 'planning';
     this.spawnArchitect(intent);
     this.emit('conductor_started', { sessionId: this.sessionId, projectName: this.projectName });
+    // Periodic state broadcast for live dashboard updates
+    this.stateInterval = setInterval(() => this.emit('state_update', { ...this.getState(), projectName: this.projectName }), 2000);
   }
+
+  private stateInterval: NodeJS.Timeout | null = null;
 
   async stop(): Promise<void> {
     console.log(`[Conductor] Stopping project "${this.projectName}"...`);
+    if (this.stateInterval) { clearInterval(this.stateInterval); this.stateInterval = null; }
     this.clearTimeouts();
     this.spawner.killAll();
     this.status = 'failed';
