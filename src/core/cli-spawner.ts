@@ -68,8 +68,8 @@ export class CLISpawner {
       process.platform === 'win32' && fs.existsSync(opencodeShell) ? 'cmd.exe' :
       'opencode';
     const spawnArgs =
-      spawnCmd === 'cmd.exe' ? ['/c', opencodeShell] :
-      [];
+      spawnCmd === 'cmd.exe' ? ['/c', opencodeShell, 'run', promptContent] :
+      ['run', promptContent];
     const ptyProcess = pty.spawn(spawnCmd, spawnArgs, {
       name: 'xterm-color',
       cols: 120,
@@ -92,13 +92,11 @@ export class CLISpawner {
 
     ptyProcess.onExit(({ exitCode, signal }) => {
       console.log(`[CLISpawner] ${role} exited (code=${exitCode} signal=${signal})`);
+      if (exitCode !== 0) {
+        console.error(`[CLISpawner] ${role} failed with exit code ${exitCode}`);
+      }
       this.lastActivity.set(role, 0);
     });
-
-    setTimeout(() => {
-      if (!this.ptys.has(role)) return;
-      ptyProcess.write(promptContent + '\n');
-    }, 1500);
 
     this.ptys.set(role, ptyProcess);
     return ptyProcess;
@@ -115,9 +113,9 @@ export class CLISpawner {
     const cmd = process.platform === 'win32' && fs.existsSync(geminiPath) ? process.execPath :
       process.platform === 'win32' && fs.existsSync(geminiShell) ? 'cmd.exe' :
       'gemini';
-    const args = process.platform === 'win32' && fs.existsSync(geminiPath) ? [geminiPath] :
-      process.platform === 'win32' && fs.existsSync(geminiShell) ? ['/c', geminiShell] :
-      [];
+    const args = process.platform === 'win32' && fs.existsSync(geminiPath) ? [geminiPath, '--prompt', promptContent] :
+      process.platform === 'win32' && fs.existsSync(geminiShell) ? ['/c', geminiShell, '--prompt', promptContent] :
+      ['--prompt', promptContent];
     const ptyProcess = pty.spawn(cmd, args, {
       name: 'xterm-color',
       cols: 120,
@@ -140,13 +138,11 @@ export class CLISpawner {
 
     ptyProcess.onExit(({ exitCode, signal }) => {
       console.log(`[CLISpawner] ${role} exited (code=${exitCode} signal=${signal})`);
+      if (exitCode !== 0) {
+        console.error(`[CLISpawner] ${role} failed with exit code ${exitCode}`);
+      }
       this.lastActivity.set(role, 0);
     });
-
-    setTimeout(() => {
-      if (!this.ptys.has(role)) return;
-      ptyProcess.write(promptContent + '\n');
-    }, 1500);
 
     this.ptys.set(role, ptyProcess);
     return ptyProcess;
