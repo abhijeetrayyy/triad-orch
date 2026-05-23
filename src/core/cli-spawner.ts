@@ -20,6 +20,10 @@ export class CLISpawner {
 
   constructor(workspacePath: string) {
     this.workspacePath = workspacePath;
+    // Workaround for node-pty ConPTY console attach failure in headless Electron
+    if (process.platform === 'win32' && !process.env.CONPTY_USE_WINPTY) {
+      process.env.CONPTY_USE_WINPTY = '1';
+    }
     this.startWatchdog();
   }
 

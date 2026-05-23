@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { FileBus } from './file-bus';
 import { GitManager, CommitEntry } from './git-manager';
 import { CLISpawner } from './cli-spawner';
@@ -10,7 +11,7 @@ import { VisualBridge } from './visual-bridge';
 import { db } from './database';
 import {
   AgentRole, ConductorStatus, ProjectModelConfig,
-  DEFAULT_MODEL_CONFIG, TaskQueueEntry
+  DEFAULT_MODEL_CONFIG, TaskQueueEntry, Checkpoint, CheckpointTask
 } from './types';
 
 const AGENT_TIMEOUT_MS = 8 * 60 * 1000;
@@ -33,6 +34,10 @@ export class Conductor {
   private loopCount: number;
   private timeoutTimers: Map<AgentRole, NodeJS.Timeout> = new Map();
   private broadcastFn: ((event: string, data: any) => void) | null = null;
+  private checkpoint: Checkpoint | null = null;
+  private checkpointPath: string = '';
+  private workspaceMapCache: string[] | null = null;
+  private workspaceMapCacheTime: number = 0;
 
   constructor(projectName: string, workspacePath: string) {
     this.projectName = projectName;
@@ -50,6 +55,7 @@ export class Conductor {
     this.currentTaskId = null;
     this.modelConfig = DEFAULT_MODEL_CONFIG;
     this.loopCount = 0;
+    this.checkpointPath = path.join(path.dirname(workspacePath), 'checkpoint.json');
   }
 
   setBroadcast(fn: (event: string, data: any) => void): void {
@@ -90,6 +96,7 @@ export class Conductor {
     const memoryContext = this.memory.getRelevantLessons(intent);
     this.fileBus.write('memory_context.md', memoryContext || 'No relevant past lessons found.');
 
+    this.initCheckpoint(intent);
     this.registerFileHandlers();
 
     await this.saveState();
@@ -504,17 +511,18 @@ export class Conductor {
 
   private parsePlan(content: string): TaskQueueEntry[] | null {
     const tasks: TaskQueueEntry[] = [];
-    const taskRegex = /### Task (\d+)\s*\*\*ID:\*\*\s*(\S+)\s*\*\*Description:\*\*\s*(.+?)\s*\*\*Dependencies:\*\*\s*(.+?)\s*\*\*Files to create or modify:\*\*\s*(.+?)\s*\*\*Estimated complexity:\*\*\s*(.+?)(?=###|$)/gs;
 
+    // Strategy 1: Structured markdown (### Task N with **ID:** labels)
+    const taskRegex = /### Task (\d+)\s*\*\*ID:\*\*\s*(\S+)\s*\*\*Description:\*\*\s*(.+?)\s*\*\*Dependencies:\*\*\s*(.+?)\s*\*\*Files to create or modify:\*\*\s*(.+?)(?=###|$)/gs;
     let match;
     while ((match = taskRegex.exec(content)) !== null) {
       const deps = match[4].trim();
       tasks.push({
         id: match[2].trim(),
         description: match[3].trim(),
-        dependencies: deps === 'none' ? [] : deps.split(',').map((d: string) => d.trim()),
+        dependencies: deps === 'none' || deps === 'N/A' ? [] : deps.split(',').map((d: string) => d.trim()),
         files_impacted: match[5].split(',').map((f: string) => f.trim()),
-        estimated_complexity: match[6].trim(),
+        estimated_complexity: 'medium',
         status: 'pending',
         retries: 0,
         reviewer_notes: '',
@@ -522,37 +530,85 @@ export class Conductor {
       });
     }
 
+    // Strategy 2: Markdown list items (- or *)
     if (tasks.length === 0) {
-      const lines = content.split('\n').filter(l => l.trim().startsWith('-') || l.trim().startsWith('*'));
+      const lines = content.split('\n').map(l => l.trim()).filter(l =>
+        l.startsWith('-') || l.startsWith('*') || /^\d+[\.\)]/.test(l)
+      );
       if (lines.length > 0) {
         lines.forEach((line, i) => {
-          tasks.push({
-            id: `t${i + 1}`,
-            description: line.replace(/^[-*]\s*/, '').trim(),
-            dependencies: [],
-            files_impacted: [],
-            estimated_complexity: 'medium',
-            status: 'pending',
-            retries: 0,
-            reviewer_notes: '',
-            auditor_notes: '',
-          });
+          const desc = line.replace(/^[-*\d]+[\.\)]?\s*/, '').trim();
+          if (desc) {
+            tasks.push({
+              id: `t${i + 1}`,
+              description: desc,
+              dependencies: [],
+              files_impacted: [],
+              estimated_complexity: 'medium',
+              status: 'pending',
+              retries: 0,
+              reviewer_notes: '',
+              auditor_notes: '',
+            });
+          }
         });
       }
+    }
+
+    // Strategy 3: Numbered JSON array ["task1", "task2", ...]
+    if (tasks.length === 0) {
+      try {
+        const jsonArray = JSON.parse(content);
+        if (Array.isArray(jsonArray)) {
+          jsonArray.forEach((item: any, i: number) => {
+            const desc = typeof item === 'string' ? item : item.description || item.task || '';
+            if (desc) {
+              tasks.push({
+                id: `t${i + 1}`,
+                description: desc,
+                dependencies: [],
+                files_impacted: [],
+                estimated_complexity: 'medium',
+                status: 'pending',
+                retries: 0,
+                reviewer_notes: '',
+                auditor_notes: '',
+              });
+            }
+          });
+        }
+      } catch (e) {}
     }
 
     return tasks.length > 0 ? tasks : null;
   }
 
   private parseReviewVerdict(content: string): 'PASS' | 'FAIL' {
-    const firstLine = content.trim().split('\n')[0].toUpperCase();
-    if (firstLine.includes('PASS')) return 'PASS';
-    if (firstLine.includes('FAIL')) return 'FAIL';
+    const firstLine = content.trim().split('\n')[0].toUpperCase().trim();
+    // Check first line starts with PASS or FAIL (word boundary)
+    if (/^PASS\b/.test(firstLine)) return 'PASS';
+    if (/^FAIL\b/.test(firstLine)) return 'FAIL';
+    if (/^#+\s*PASS\b/.test(firstLine)) return 'PASS';
+    if (/^#+\s*FAIL\b/.test(firstLine)) return 'FAIL';
 
-    if (content.toUpperCase().includes('**VERDICT:** PASS')) return 'PASS';
-    if (content.toUpperCase().includes('**VERDICT:** FAIL')) return 'FAIL';
+    // Check for **Verdict:** marker
+    const verdictMatch = content.match(/\*\*Verdict:\*\*\s*(PASS|FAIL)/i);
+    if (verdictMatch) return verdictMatch[1].toUpperCase() as 'PASS' | 'FAIL';
 
-    return content.toUpperCase().includes('PASS') ? 'PASS' : 'FAIL';
+    // Check for Verdict: marker
+    const verdictMatch2 = content.match(/Verdict:\s*(PASS|FAIL)/i);
+    if (verdictMatch2) return verdictMatch2[1].toUpperCase() as 'PASS' | 'FAIL';
+
+    // Fallback: check if "PASS" appears as a standalone word (not preceded by NOT)
+    const hasPass = /\bPASS\b/i.test(content);
+    const hasFail = /\bFAIL\b/i.test(content);
+    const hasNot = /\bNOT\s+PASS\b/i.test(content);
+
+    if (hasNot) return 'FAIL';
+    if (hasPass && !hasFail) return 'PASS';
+    if (hasFail && !hasPass) return 'FAIL';
+
+    return 'FAIL';
   }
 
   private extractLesson(content: string): string {
@@ -592,7 +648,13 @@ export class Conductor {
   }
 
   private getWorkspaceMap(): string[] {
-    return this.walkDir(this.workspacePath);
+    const now = Date.now();
+    if (this.workspaceMapCache && (now - this.workspaceMapCacheTime) < 10000) {
+      return this.workspaceMapCache;
+    }
+    this.workspaceMapCache = this.walkDir(this.workspacePath);
+    this.workspaceMapCacheTime = now;
+    return this.workspaceMapCache;
   }
 
   private walkDir(dir: string, fileList: string[] = [], baseDir?: string): string[] {
@@ -612,6 +674,59 @@ export class Conductor {
     return fileList;
   }
 
+  private initCheckpoint(intent: string): void {
+    if (fs.existsSync(this.checkpointPath)) {
+      try {
+        this.checkpoint = JSON.parse(fs.readFileSync(this.checkpointPath, 'utf-8'));
+        if (this.checkpoint?.status === 'completed') this.checkpoint = null;
+      } catch (e) { this.checkpoint = null; }
+    }
+    if (!this.checkpoint) {
+      this.checkpoint = {
+        session_id: this.sessionId,
+        project_name: this.projectName,
+        status: 'planning',
+        intent_hash: crypto.createHash('sha256').update(intent || '').digest('hex'),
+        last_checkpoint_at: new Date().toISOString(),
+        last_completed_phase: '',
+        current_task_id: '',
+        tasks: [],
+        file_manifest: { created: [], modified: [], deleted: [] },
+        model_config_snapshot: {},
+        loop_count: 0,
+        interruption_reason: null
+      };
+    }
+  }
+
+  private saveCheckpoint(): void {
+    if (!this.checkpoint) return;
+    this.checkpoint.last_checkpoint_at = new Date().toISOString();
+    this.checkpoint.loop_count = this.loopCount;
+    this.checkpoint.status = this.status;
+    this.checkpoint.current_task_id = this.currentTaskId || '';
+    this.checkpoint.model_config_snapshot = {
+      architect: this.modelConfig.architect,
+      builder: this.modelConfig.builder,
+      reviewer: this.modelConfig.reviewer,
+      auditor: this.modelConfig.auditor
+    };
+    // Sync tasks from taskQueue
+    this.checkpoint.tasks = this.taskQueue.map(t => ({
+      id: t.id,
+      description: t.description,
+      status: t.status,
+      completed_at: t.status === 'completed' ? new Date().toISOString() : null,
+      retry_count: t.retries,
+      files_created: t.files_impacted || [],
+      files_modified: [],
+      files_deleted: [],
+      reviewer_notes: t.reviewer_notes || null,
+      auditor_notes: t.auditor_notes || null
+    }));
+    try { fs.writeFileSync(this.checkpointPath, JSON.stringify(this.checkpoint, null, 2)); } catch (e) {}
+  }
+
   private async saveState(): Promise<void> {
     const state = {
       session_id: this.sessionId,
@@ -627,6 +742,7 @@ export class Conductor {
 
     this.fileBus.write('state.json', JSON.stringify(state, null, 2));
     this.emit('state_update', state);
+    this.saveCheckpoint();
 
     db.upsertProject(this.projectName,
       this.fileBus.exists('intent.md') ? this.fileBus.read('intent.md') : '',
@@ -659,16 +775,44 @@ export class Conductor {
   private async handleTimeout(role: AgentRole): Promise<void> {
     console.error(`[Conductor] Agent ${role} timed out.`);
     this.spawner.kill(role);
+    this.clearTimeout(role);
 
     const currentTask = this.taskQueue.find(t => t.id === this.currentTaskId);
     if (currentTask) {
-      currentTask.status = 'failed';
       currentTask.retries++;
+      if (currentTask.retries >= 3) {
+        currentTask.status = 'failed';
+        console.error(`[Conductor] Task ${this.currentTaskId} failed after 3 timeouts.`);
+        try {
+          await this.git.commit(`[${this.sessionId}] [${role}] ${this.currentTaskId}: TIMEOUT — max retries`);
+        } catch (e: any) {}
+        await this.saveState();
+        this.emit('task_failed', { taskId: this.currentTaskId, reason: 'timeout' });
+        await this.startNextTask();
+        return;
+      }
+      currentTask.status = 'pending';
       try {
-        await this.git.commit(`[${this.sessionId}] [${role}] ${this.currentTaskId || 'task'}: TIMEOUT`);
+        await this.git.commit(`[${this.sessionId}] [${role}] ${this.currentTaskId || 'task'}: TIMEOUT — retry ${currentTask.retries}`);
       } catch (e: any) {}
       await this.saveState();
-      this.emit('agent_timeout', { role, taskId: this.currentTaskId });
+      this.emit('agent_timeout', { role, taskId: this.currentTaskId, retry: currentTask.retries });
+      // Re-spawn the agent
+      this.respawnAgent(role);
+    }
+  }
+
+  private respawnAgent(role: AgentRole): void {
+    if (role === 'architect') {
+      const intent = this.fileBus.exists('intent.md') ? this.fileBus.read('intent.md') : '';
+      this.spawnArchitect(intent);
+    } else if (role === 'builder') {
+      this.spawnBuilder('', '');
+    } else if (role === 'reviewer') {
+      this.spawnReviewer();
+    } else if (role === 'auditor') {
+      const currentTask = this.taskQueue.find(t => t.id === this.currentTaskId);
+      this.spawnAuditor(currentTask?.reviewer_notes || '');
     }
   }
 

@@ -4,6 +4,12 @@ const { exec, spawn } = require('child_process');
 const fs = require('fs');
 const http = require('http');
 
+// Suppress EPIPE errors from node-pty after process exit (harmless)
+process.on('uncaughtException', (err) => {
+  if (err.code === 'EPIPE' && err.message.includes('broken pipe')) return;
+  console.error('Uncaught Exception:', err);
+});
+
 // Register ts-node to handle .ts imports
 require('ts-node').register({ project: path.join(__dirname, '..', 'tsconfig.json') });
 
