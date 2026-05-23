@@ -1,0 +1,573 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Triad Command Suite v6.1</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;900&family=JetBrains+Mono:wght@400;700&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #020617; color: #f8fafc; margin: 0; padding: 0; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .glass { background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(20px); border: 1px solid #1e293b; }
+        .active-tab { color: #3b82f6; border-bottom: 2px solid #3b82f6; }
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 10px; }
+        .input-area { background: #000; border: 1px solid #1e293b; border-radius: 12px; font-size: 11px; padding: 10px; color: #94a3b8; outline: none; transition: border-color 0.2s; }
+        .input-area:focus { border-color: #3b82f6; color: #f8fafc; }
+        /* Fix flex scrolling — allow flex children to shrink below content height */
+        .flex-col, .flex { min-height: 0; min-width: 0; }
+        .h-screen .flex-1 { min-height: 0; }
+    </style>
+</head>
+<body class="flex overflow-hidden h-screen">
+
+    <!-- Global Rail -->
+    <aside class="w-16 bg-slate-950 flex flex-col items-center py-10 gap-10 border-r border-slate-900 z-50">
+        <div class="w-10 h-10 bg-blue-600 rounded-2xl flex items-center justify-center font-black text-white shadow-xl">T</div>
+        <button onclick="navigate('dashboard')" class="text-slate-500 hover:text-white transition"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z"></path></svg></button>
+        <button onclick="navigate('models')" class="text-slate-500 hover:text-white transition"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"></path></svg></button>
+        <button onclick="navigate('system')" class="text-slate-500 hover:text-white transition"><svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path></svg></button>
+    </aside>
+
+    <!-- Sidebar -->
+    <aside class="w-64 bg-slate-900 border-r border-slate-800 flex flex-col">
+        <div class="p-6 border-b border-slate-800 flex justify-between items-center">
+            <span class="text-[10px] font-black uppercase text-slate-500 tracking-widest">Projects</span>
+            <button onclick="openModal()" class="text-blue-500 font-bold hover:scale-125 transition">+</button>
+        </div>
+        <div id="project-list" class="flex-1 overflow-y-auto p-4 space-y-2"></div>
+        <div class="p-4 border-t border-slate-800 text-[9px] font-black uppercase text-slate-600 flex justify-between">
+            <span>v6.1 STABLE</span>
+            <span id="ws-status">OFFLINE</span>
+        </div>
+    </aside>
+
+    <!-- Master Command Studio -->
+    <main class="flex-1 flex flex-col overflow-hidden">
+        
+        <!-- Project Header -->
+        <header id="project-header" class="h-24 bg-slate-950 border-b border-slate-800 flex items-center px-12 justify-between hidden">
+            <div class="flex items-center gap-6">
+                <div id="orb" class="w-3 h-3 rounded-full bg-slate-700"></div>
+                <div>
+                    <h1 id="active-project-name" class="text-2xl font-black uppercase tracking-tighter text-white">Project ID</h1>
+                    <div class="flex items-center gap-3">
+                        <p id="proj-path-text" class="text-[10px] font-mono text-slate-500">C:\...</p>
+                        <button onclick="bridge && bridge.openProjectFolder(activeProject)" class="text-[9px] text-blue-500 font-black uppercase hover:underline">Open Folder</button>
+                    </div>
+                </div>
+            </div>
+            <div class="flex gap-4">
+                <button onclick="saveEverything()" class="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-xs font-black uppercase transition shadow-lg">Save Config</button>
+                <button onclick="launchSession()" class="px-6 py-2 bg-blue-600 hover:bg-blue-500 rounded-xl text-xs font-black uppercase transition">Launch Engine</button>
+                <button onclick="killProject()" class="px-6 py-2 bg-red-600/20 border border-red-500/30 text-red-500 rounded-xl text-xs font-black uppercase transition hover:bg-red-600 hover:text-white">Kill All</button>
+            </div>
+        </header>
+
+        <!-- Sub-Tabs -->
+        <nav id="sub-tabs" class="h-10 border-b border-slate-800 bg-slate-950/30 flex items-center px-12 gap-8 hidden">
+            <button onclick="switchSubTab('studio')" id="st-studio" class="text-[10px] font-black uppercase tracking-widest active-tab h-full transition">Studio Control</button>
+            <button onclick="switchSubTab('history')" id="st-history" class="text-[10px] font-black uppercase tracking-widest text-slate-500 h-full transition">Session History</button>
+        </nav>
+
+        <!-- Main Studio Layout -->
+        <div id="view-dashboard" class="flex-1 overflow-hidden hidden flex flex-col">
+            
+            <!-- SUB-VIEW: STUDIO -->
+            <div id="sub-view-studio" class="flex-1 flex flex-col overflow-hidden">
+                <!-- Top Section: Intent & Prompts -->
+                <div class="grid grid-cols-5 gap-4 p-8 border-b border-slate-800 bg-slate-900/20">
+                    <div class="flex flex-col gap-2"><label class="text-[10px] font-black text-slate-500 uppercase">Global Intent</label><textarea id="i-intent" class="input-area h-32 resize-none"></textarea></div>
+                    <div class="flex flex-col gap-2"><label class="text-[10px] font-black text-blue-400 uppercase tracking-widest">Architect</label><textarea id="i-architect" class="input-area h-32 resize-none"></textarea></div>
+                    <div class="flex flex-col gap-2"><label class="text-[10px] font-black text-green-400 uppercase tracking-widest">Builder</label><textarea id="i-builder" class="input-area h-32 resize-none"></textarea></div>
+                    <div class="flex flex-col gap-2"><label class="text-[10px] font-black text-yellow-400 uppercase tracking-widest">Reviewer</label><textarea id="i-reviewer" class="input-area h-32 resize-none"></textarea></div>
+                    <div class="flex flex-col gap-2"><label class="text-[10px] font-black text-purple-400 uppercase tracking-widest">Auditor</label><textarea id="i-auditor" class="input-area h-32 resize-none"></textarea></div>
+                </div>
+
+                <!-- Model Config Section (per-project model overrides) -->
+                <div id="model-override-bar" class="bg-slate-900/10 p-4 border-b border-slate-800 hidden">
+                    <div class="flex items-center gap-4 mb-3">
+                        <span class="text-[9px] font-black uppercase text-slate-500 tracking-widest">Model Overrides</span>
+                        <button onclick="loadModelList()" class="text-[8px] text-blue-500 font-black uppercase hover:underline">↻ Refresh Models</button>
+                        <button onclick="saveModelConfig()" class="text-[8px] text-green-500 font-black uppercase hover:underline">Apply</button>
+                    </div>
+                    <div id="model-selectors" class="flex gap-4 flex-wrap">
+                        <div class="role-model-selector" data-role="architect">
+                            <div class="text-[8px] text-blue-400 font-black uppercase mb-1">Architect</div>
+                            <select class="bg-black/60 border border-slate-700 rounded px-2 py-1 text-[10px] text-white w-28 outline-none focus:border-blue-500"></select>
+                        </div>
+                        <div class="role-model-selector" data-role="builder">
+                            <div class="text-[8px] text-green-400 font-black uppercase mb-1">Builder</div>
+                            <select class="bg-black/60 border border-slate-700 rounded px-2 py-1 text-[10px] text-white w-28 outline-none focus:border-blue-500"></select>
+                        </div>
+                        <div class="role-model-selector" data-role="reviewer">
+                            <div class="text-[8px] text-yellow-400 font-black uppercase mb-1">Reviewer</div>
+                            <select class="bg-black/60 border border-slate-700 rounded px-2 py-1 text-[10px] text-white w-28 outline-none focus:border-blue-500"></select>
+                        </div>
+                        <div class="role-model-selector" data-role="auditor">
+                            <div class="text-[8px] text-purple-400 font-black uppercase mb-1">Auditor</div>
+                            <select class="bg-black/60 border border-slate-700 rounded px-2 py-1 text-[10px] text-white w-28 outline-none focus:border-blue-500"></select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bottom Section: Execution & Logs -->
+                <div class="flex-1 grid grid-cols-12 overflow-hidden">
+                    <div class="col-span-8 flex flex-col border-r border-slate-800">
+                        <div class="p-6 border-b border-slate-800 flex justify-between items-center bg-slate-900/10">
+                            <h3 class="text-[11px] font-black text-slate-500 uppercase tracking-widest">Logic Pipeline</h3>
+                            <div id="session-count" class="text-[9px] font-black bg-blue-600/20 text-blue-400 px-3 py-1 rounded-full uppercase">0 Sessions Active</div>
+                        </div>
+                        <div id="task-board" class="flex-1 overflow-y-auto p-8 space-y-4"></div>
+                    </div>
+                    <div class="col-span-4 flex flex-col">
+                        <div class="flex-1 flex flex-col bg-black/50 p-6 overflow-hidden">
+                            <h3 class="text-[10px] font-black text-slate-500 uppercase mb-4 tracking-widest text-green-500 italic">Engine Log Feed</h3>
+                            <div class="flex gap-2 mb-2 flex-wrap">
+                                <button onclick="setLogFilter('all')" class="log-filter-btn text-[8px] font-black uppercase px-2 py-1 rounded bg-blue-600/20 text-blue-400 data-active:bg-blue-600/40" data-filter="all">ALL</button>
+                                <button onclick="setLogFilter('model')" class="log-filter-btn text-[8px] font-black uppercase px-2 py-1 rounded bg-slate-800 text-slate-400 data-active:bg-purple-600/40" data-filter="model">MODEL</button>
+                                <button onclick="setLogFilter('tool')" class="log-filter-btn text-[8px] font-black uppercase px-2 py-1 rounded bg-slate-800 text-slate-400 data-active:bg-green-600/40" data-filter="tool">TOOL</button>
+                                <button onclick="setLogFilter('audit')" class="log-filter-btn text-[8px] font-black uppercase px-2 py-1 rounded bg-slate-800 text-slate-400 data-active:bg-yellow-600/40" data-filter="audit">AUDIT</button>
+                                <button onclick="setLogFilter('error')" class="log-filter-btn text-[8px] font-black uppercase px-2 py-1 rounded bg-slate-800 text-slate-400 data-active:bg-red-600/40" data-filter="error">ERROR</button>
+                            </div>
+                            <div id="log-feed" class="flex-1 overflow-y-auto mono text-[10px] space-y-1"></div>
+                        </div>
+                        <div class="h-1/3 border-t border-slate-800 bg-slate-900/50 flex flex-col p-4 min-h-0">
+                            <h3 class="text-[10px] font-black text-slate-500 uppercase mb-2">Audit Capture</h3>
+                            <div id="screenshot" class="flex-1 bg-slate-950 rounded-xl flex items-center justify-center text-[10px] text-slate-800 font-black italic overflow-y-auto">No Preview</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SUB-VIEW: HISTORY -->
+            <div id="sub-view-history" class="hidden flex-1 grid grid-cols-12 p-8 gap-8 overflow-hidden min-h-0">
+                <div class="col-span-4 glass rounded-[40px] flex flex-col overflow-hidden min-h-0">
+                    <div class="p-8 border-b border-slate-800 font-black text-[10px] uppercase tracking-[0.2em] bg-slate-950/20">Session Vault</div>
+                    <div id="history-log-list" class="flex-1 overflow-y-auto p-6 space-y-3 min-h-0"></div>
+                </div>
+                <div class="col-span-8 glass rounded-[40px] p-10 flex flex-col overflow-hidden min-h-0">
+                    <div id="history-log-name" class="text-[10px] font-black text-blue-500 uppercase mb-6 tracking-widest">Select trace to audit...</div>
+                    <div id="history-log-content" class="flex-1 bg-black/80 p-8 rounded-[32px] mono text-[11px] text-slate-400 overflow-y-auto whitespace-pre-wrap leading-relaxed border border-slate-800 min-h-0"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Global View: Models -->
+        <div id="view-models" class="flex-1 p-12 overflow-y-auto hidden min-h-0">
+            <h2 class="text-4xl font-black mb-12 italic uppercase text-blue-500 tracking-tighter">Models &amp; Providers</h2>
+            <div id="model-status" class="text-xs text-slate-400"></div>
+            <div class="mt-8 flex gap-4">
+                <button onclick="refreshModels()" class="px-6 py-3 bg-blue-600 rounded-xl text-[10px] font-black uppercase hover:bg-blue-500 transition">Test All Models</button>
+            </div>
+        </div>
+
+        <!-- Global View: System -->
+        <div id="view-system" class="flex-1 p-12 overflow-y-auto hidden min-h-0">
+            <h2 class="text-4xl font-black mb-12 italic uppercase text-blue-500 tracking-tighter">System God Mode</h2>
+
+            <div class="mb-12">
+                <h3 class="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-6">Running Engine Sessions</h3>
+                <div id="process-list" class="space-y-3">
+                    <p class="text-[10px] text-slate-700 italic">No active sessions.</p>
+                </div>
+            </div>
+
+            <div id="sys-stats-raw" class="mono text-xs text-slate-400 whitespace-pre bg-black/40 p-8 rounded-3xl glass border-l-4 border-blue-500 overflow-y-auto max-h-[70vh]"></div>
+        </div>
+
+        <div id="empty-state" class="flex-1 flex items-center justify-center text-slate-800 font-black uppercase tracking-[0.4em] opacity-20 text-2xl italic">Master Command Studio v6.1</div>
+    </main>
+
+    <!-- Modal -->
+    <div id="modal" class="fixed inset-0 bg-slate-950/95 backdrop-blur-3xl hidden items-center justify-center z-[100]">
+        <div class="glass w-[550px] p-12 rounded-[50px]">
+            <h2 class="text-2xl font-black mb-8 italic uppercase text-blue-500 tracking-tighter text-center">New Core</h2>
+            <input id="m-name" type="text" placeholder="Project ID" class="w-full bg-slate-900 border border-slate-800 p-5 rounded-2xl text-sm mb-6 outline-none focus:border-blue-500 transition mono">
+            <textarea id="m-intent" placeholder="Mission Goal..." class="w-full bg-slate-900 border border-slate-800 p-5 rounded-2xl h-44 text-sm outline-none focus:border-blue-500 transition resize-none mb-8"></textarea>
+            <div class="flex gap-6"><button onclick="closeModal()" class="flex-1 text-slate-500 font-black text-[10px] uppercase">Abort</button><button onclick="launchNew()" class="flex-1 py-5 bg-blue-600 rounded-2xl text-[10px] font-black uppercase shadow-xl shadow-blue-500/20 transition hover:bg-blue-500">Initialize</button></div>
+        </div>
+    </div>
+
+    <div id="toast" class="fixed bottom-8 right-8 bg-green-600 text-white px-8 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-2xl transition-all duration-500 opacity-0 translate-y-4 z-[200] pointer-events-none"></div>
+
+    <script>
+        // In Electron (file:// protocol), hardcode to localhost. In browser, use relative.
+        const API = window.location.protocol === 'file:' ? 'http://localhost:4002/api' : window.location.origin.replace(/:\d+$/, '') + ':4002/api';
+        let activeProject = null;
+        let activeProcData = [];
+        let projectLedger = null;
+        let ws;
+
+        function showToast(msg) {
+            const el = document.getElementById('toast');
+            el.textContent = msg;
+            el.className = 'fixed bottom-8 right-8 bg-green-600 text-white px-8 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-2xl transition-all duration-500 opacity-100 translate-y-0 z-[200] pointer-events-none';
+            setTimeout(() => { el.className = 'fixed bottom-8 right-8 bg-green-600 text-white px-8 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest shadow-2xl transition-all duration-500 opacity-0 translate-y-4 z-[200] pointer-events-none'; }, 2500);
+        }
+
+        function connect() {
+            console.log('[WS] Connecting to ws://localhost:4002...');
+            ws = new WebSocket('ws://localhost:4002');
+            ws.onopen = () => {
+                console.log('[WS] Connected');
+                document.getElementById('ws-status').innerText = 'ONLINE';
+                document.getElementById('ws-status').className = 'text-green-500 font-bold';
+                fetchProjects();
+            };
+            ws.onmessage = (e) => {
+                const d = JSON.parse(e.data);
+                if (d.type === 'ledger_update' && d.projectName === activeProject) { projectLedger = d.ledger; renderBoard(); }
+                if (d.type === 'log' && d.projectName === activeProject) log(d.message);
+            };
+            ws.onerror = (err) => {
+                console.error('[WS] Error:', err);
+            };
+            ws.onclose = (evt) => {
+                console.log('[WS] Closed (code=' + evt.code + ' reason=' + evt.reason + ')');
+                document.getElementById('ws-status').innerText = 'OFFLINE';
+                document.getElementById('ws-status').className = 'text-slate-500 font-bold';
+                setTimeout(connect, 2000);
+            };
+        }
+
+        // Strip ANSI escape codes from raw terminal output
+        function stripAnsi(str) {
+            return str.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])|(?:\r?\n)|[\x00-\x1F]?(?:\[|{)[0-9;]*[A-Za-z]/g, '')
+                      .replace(/\r/g, '')
+                      .replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '')
+                      .replace(/\x1B\][0-9;]*\x07/g, '')
+                      .replace(/[\x00-\x09\x0B-\x1F\x7F]/g, '')
+                      .trim();
+        }
+
+        // Use electronAPI if available (Electron), otherwise fallback
+        const bridge = window.electronAPI || null;
+        if (bridge) {
+            bridge.onProcessListUpdate((d) => { activeProcData = d; fetchProjects(); if(activeProject) updateMeta(); });
+            bridge.onEngineOutput((d) => {
+                if (d.projectName === activeProject) {
+                    const clean = stripAnsi(d.data);
+                    if (clean) log(clean);
+                }
+            });
+        }
+
+        function navigate(v) {
+            ['dashboard', 'system', 'models'].forEach(id => document.getElementById('view-'+id)?.classList.add('hidden'));
+            document.getElementById('view-'+v).classList.remove('hidden');
+            document.getElementById('empty-state').classList.add('hidden');
+            if (v === 'system') refreshSystem();
+            if (v === 'models') refreshModels();
+        }
+
+        function switchSubTab(t) {
+            ['studio', 'history'].forEach(id => {
+                document.getElementById('sub-view-' + id).classList.add('hidden');
+                document.getElementById('st-' + id).classList.remove('active-tab');
+                document.getElementById('st-' + id).classList.add('text-slate-500');
+            });
+            document.getElementById('sub-view-' + t).classList.remove('hidden');
+            document.getElementById('st-' + t).classList.add('active-tab');
+            if (t === 'history') fetchLogs();
+        }
+
+        async function fetchProjects() {
+            try {
+                const res = await fetch(`${API}/projects`);
+                const list = await res.json();
+                document.getElementById('project-list').innerHTML = list.map(p => {
+                    const active = activeProcData.find(a => a.name === p);
+                    const count = active ? active.count : 0;
+                    return `<button onclick="selectProject('${p}')" class="w-full text-left p-4 rounded-[20px] hover:bg-slate-800 transition flex items-center justify-between group">
+                        <span class="text-[11px] font-black tracking-tight ${activeProject === p ? 'text-blue-400' : 'text-slate-500 uppercase'}">${p}</span>
+                        <div class="flex items-center gap-2">${count > 0 ? `<span class="text-[9px] font-black text-blue-500">${count}</span>` : ''}<div class="w-1.5 h-1.5 rounded-full ${count > 0 ? 'bg-blue-500 animate-pulse' : 'bg-slate-800'}"></div></div>
+                    </button>`;
+                }).join('') || '<p class="text-[10px] text-slate-700 p-4">NO PROJECTS</p>';
+            } catch (e) {}
+        }
+
+        async function selectProject(p) {
+            console.log("[Studio] Loading Project:", p);
+            activeProject = p;
+
+            // Clear previous log feed
+            document.getElementById('log-feed').innerHTML = '';
+            document.getElementById('screenshot').innerHTML = 'No Preview';
+
+            // 1. Show Main View
+            navigate('dashboard');
+
+            // 2. Show Sub-Tabs and Header
+            document.getElementById('project-header').classList.remove('hidden');
+            document.getElementById('sub-tabs').classList.remove('hidden');
+            document.getElementById('active-project-name').innerText = p;
+
+            // 3. Default to Studio View
+            switchSubTab('studio');
+
+            try {
+                const res = await fetch(`${API}/projects/${p}/ledger`);
+                const data = await res.json();
+                projectLedger = data.ledger;
+                console.log("[Studio] Ledger Loaded:", projectLedger);
+
+                document.getElementById('proj-path-text').innerText = data.path;
+
+                // Populate Inputs
+                document.getElementById('i-intent').value = projectLedger.global_intent || '';
+                document.getElementById('i-architect').value = projectLedger.system_prompts?.architect || '';
+                document.getElementById('i-builder').value = projectLedger.system_prompts?.builder || '';
+                document.getElementById('i-reviewer').value = projectLedger.system_prompts?.reviewer || '';
+                document.getElementById('i-auditor').value = projectLedger.system_prompts?.auditor || '';
+
+                // Populate model overrides
+                const mc = projectLedger.model_config || {};
+                document.querySelectorAll('.role-model-selector').forEach(el => {
+                    const role = el.dataset.role;
+                    const override = mc[role];
+                    const sel = el.querySelector('select');
+                    sel.dataset.currentValue = override ? `${override.provider}/${override.name}` : '';
+                });
+                // Show the model override bar and load models
+                document.getElementById('model-override-bar').classList.remove('hidden');
+                loadModelList();
+
+                renderBoard();
+                updateMeta();
+            } catch (e) {
+                console.error("[Studio] Failed to load project data:", e);
+            }
+        }
+
+        async function saveEverything() {
+            if(!activeProject) return;
+            projectLedger.global_intent = document.getElementById('i-intent').value;
+            projectLedger.system_prompts = {
+                architect: document.getElementById('i-architect').value,
+                builder: document.getElementById('i-builder').value,
+                reviewer: document.getElementById('i-reviewer').value,
+                auditor: document.getElementById('i-auditor').value
+            };
+            await fetch(`${API}/projects/${activeProject}/ledger`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(projectLedger) });
+            showToast('Configuration saved.');
+            renderBoard();
+        }
+
+        async function refreshSystem() {
+            try {
+                const [statsRes] = await Promise.all([
+                    fetch(`${API}/system/stats`),
+                ]);
+                const stats = await statsRes.json();
+                document.getElementById('sys-stats-raw').innerText = JSON.stringify(stats, null, 2);
+
+                const listEl = document.getElementById('process-list');
+                if (!activeProcData || activeProcData.length === 0) {
+                    listEl.innerHTML = '<p class="text-[10px] text-slate-700 italic">No active sessions.</p>';
+                } else {
+                    listEl.innerHTML = activeProcData.map(p => `
+                        <div class="glass rounded-2xl p-4 flex items-center justify-between">
+                            <div class="flex items-center gap-3">
+                                <div class="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                                <span class="text-xs font-black uppercase tracking-tight text-white">${p.name}</span>
+                                <span class="text-[9px] text-slate-500">${p.count} session${p.count > 1 ? 's' : ''}</span>
+                            </div>
+                            <button onclick="bridge && bridge.stopProject('${p.name}')" class="text-[9px] font-black uppercase text-red-500 hover:text-red-400 transition px-3 py-1 rounded-full border border-red-500/30">KILL</button>
+                        </div>
+                    `).join('');
+                }
+            } catch (e) {
+                console.error("[System] Failed to load data:", e);
+            }
+        }
+
+        async function fetchLogs() {
+            const res = await fetch(`${API}/projects/${activeProject}/logs`);
+            const logs = await res.json();
+            document.getElementById('history-log-list').innerHTML = logs.map(l => `<button onclick="viewLog('${l}')" class="w-full text-left p-4 rounded-2xl bg-slate-950/40 border border-slate-800 hover:border-blue-500 transition text-[10px] mono text-slate-400 font-bold uppercase">${l}</button>`).join('') || '<p class="text-[10px] p-4 italic text-slate-700">Empty vault.</p>';
+        }
+
+        async function viewLog(file) {
+            document.getElementById('history-log-name').innerText = file;
+            const res = await fetch(`${API}/projects/${activeProject}/logs/${file}`);
+            const text = await res.text();
+            document.getElementById('history-log-content').innerText = text;
+        }
+
+        function updateMeta() {
+            const p = activeProcData.find(a => a.name === activeProject);
+            const count = p ? p.count : 0;
+            document.getElementById('session-count').innerText = `${count} SESSIONS ACTIVE`;
+            document.getElementById('orb').className = `w-3 h-3 rounded-full ${count > 0 ? 'bg-blue-500 shadow-[0_0_8px_#3b82f6]' : 'bg-slate-700'}`;
+        }
+
+        function renderBoard() {
+            if(!projectLedger) return;
+            document.getElementById('task-board').innerHTML = projectLedger.task_queue.map(t => `
+                <div class="p-8 glass rounded-[40px] border-l-[12px] ${t.status === 'completed' ? 'border-green-500 bg-green-500/5' : t.status === 'failed' ? 'border-red-500 bg-red-500/5' : 'border-blue-500 bg-blue-500/5'} transition-all">
+                    <div class="flex justify-between font-black text-xs uppercase mb-1 tracking-tighter"><span>${t.description}</span><span class="opacity-20">${t.status}</span></div>
+                    ${t.reviewer_notes ? `<div class="mt-2 p-4 bg-yellow-900/20 rounded-2xl text-[11px] text-yellow-400 mono border border-yellow-900/10 leading-relaxed">${t.reviewer_notes}</div>` : ''}
+                    ${t.auditor_notes ? `<div class="mt-2 p-4 bg-black/40 rounded-2xl text-[11px] text-red-400 mono border border-red-900/10 leading-relaxed">${t.auditor_notes}</div>` : ''}
+                </div>
+            `).join('') || '<p class="text-center mt-20 text-slate-800 font-black text-xs uppercase">Synthesizing...</p>';
+        }
+
+        let logFilter = 'all';
+        const LOG_COLORS = {
+            model: 'text-purple-400',
+            tool: 'text-green-400',
+            audit: 'text-yellow-400',
+            error: 'text-red-400',
+            tick: 'text-blue-400',
+            default: 'text-slate-300'
+        };
+
+        function detectLogType(msg) {
+            if (msg.includes('[MODEL]')) return 'model';
+            if (msg.includes('[Tool]') || msg.includes('Action Result') || msg.includes('Command')) return 'tool';
+            if (msg.includes('Auditor') || msg.includes('Audit') || msg.includes('PASS') || msg.includes('FAILED')) return 'audit';
+            if (msg.includes('ERROR') || msg.includes('error') || msg.includes('fail') || msg.includes('Error')) return 'error';
+            if (msg.includes('Tick')) return 'tick';
+            return 'default';
+        }
+
+        function setLogFilter(filter) {
+            logFilter = filter;
+            document.querySelectorAll('.log-filter-btn').forEach(b => {
+                const isActive = b.dataset.filter === filter;
+                b.className = `log-filter-btn text-[8px] font-black uppercase px-2 py-1 rounded ${isActive ? 'bg-blue-600/40 text-blue-300' : 'bg-slate-800 text-slate-500'}`;
+            });
+            // Re-apply visibility to all existing log lines
+            document.querySelectorAll('.log-line').forEach(line => {
+                const type = line.dataset.logType || 'default';
+                line.style.display = (filter === 'all' || filter === type) ? '' : 'none';
+            });
+        }
+
+        function log(m) {
+            const f = document.getElementById('log-feed');
+            const type = detectLogType(m);
+            // Only append if filter matches
+            if (logFilter !== 'all' && logFilter !== type) return;
+            const d = document.createElement('div');
+            d.className = `mb-1 log-line ${LOG_COLORS[type] || LOG_COLORS.default}`;
+            d.dataset.logType = type;
+            d.textContent = `> ${m}`;
+            f.appendChild(d);
+        }
+
+        const obs = new MutationObserver(muts => muts.forEach(m => m.target.scrollTop = m.target.scrollHeight));
+        window.addEventListener('DOMContentLoaded', () => {
+            obs.observe(document.getElementById('task-board'), { childList: true });
+            obs.observe(document.getElementById('log-feed'), { childList: true });
+            obs.observe(document.getElementById('history-log-content'), { childList: true });
+        });
+
+        function launchSession() {
+            if (!activeProject) return;
+            if (bridge) {
+                bridge.startProject(activeProject, document.getElementById('i-intent').value);
+            }
+        }
+        function killProject() {
+            if (!activeProject) return;
+            if (bridge) {
+                bridge.stopProject(activeProject);
+            }
+        }
+        function openModal() { document.getElementById('modal').style.display = 'flex'; }
+        function closeModal() { document.getElementById('modal').style.display = 'none'; }
+        function launchNew() {
+            const n = document.getElementById('m-name').value;
+            const i = document.getElementById('m-intent').value;
+            if(!n || !i) return;
+            if (bridge) {
+                bridge.startProject(n, i);
+            }
+            closeModal();
+            setTimeout(fetchProjects, 1000);
+            setTimeout(() => selectProject(n), 1500);
+        }
+
+        // --- Model Management ---
+        let availableModels = {};
+
+        async function loadModelList() {
+            try {
+                const res = await fetch(`${API}/models/list?refresh=1`);
+                availableModels = await res.json();
+                // Populate each role selector
+                document.querySelectorAll('.role-model-selector').forEach(el => {
+                    const role = el.dataset.role;
+                    const sel = el.querySelector('select');
+                    const currentVal = sel.dataset.currentValue || '';
+                    // Build options grouped by provider
+                    let html = '<option value="">Default (global)</option>';
+                    for (const [provider, models] of Object.entries(availableModels)) {
+                        if (models.length === 0) continue;
+                        html += `<optgroup label="${provider}">`;
+                        for (const model of models) {
+                            const val = `${provider}/${model}`;
+                            const selected = val === currentVal ? ' selected' : '';
+                            html += `<option value="${val}"${selected}>${provider} / ${model}</option>`;
+                        }
+                        html += '</optgroup>';
+                    }
+                    sel.innerHTML = html;
+                    if (currentVal) sel.value = currentVal;
+                });
+            } catch (e) {
+                console.error('Failed to load models:', e);
+            }
+        }
+
+        async function refreshModels() {
+            const el = document.getElementById('model-status');
+            el.innerHTML = '<p class="text-slate-500">Testing models...</p>';
+            try {
+                const res = await fetch(`${API}/models/status`);
+                const data = await res.json();
+                el.innerHTML = '<div class="space-y-3">' + Object.entries(data.status).map(([role, s]) => `
+                    <div class="glass rounded-2xl p-6 flex items-center justify-between">
+                        <div>
+                            <span class="font-black text-xs uppercase tracking-wider text-white">${role}</span>
+                            <span class="text-[10px] text-slate-500 ml-4">${data.models[role]?.provider || '?'} / ${data.models[role]?.name || '?'}</span>
+                        </div>
+                        <div class="flex items-center gap-4">
+                            <span class="text-[10px] text-slate-600">${s.latency}ms</span>
+                            <span class="px-3 py-1 rounded-full text-[9px] font-black uppercase ${s.ok ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'}">${s.ok ? 'ONLINE' : 'ERROR'}</span>
+                        </div>
+                    </div>
+                `).join('') + '</div>';
+            } catch (e) {
+                el.innerHTML = `<p class="text-red-400">Failed to check models: ${e.message}</p>`;
+            }
+        }
+
+        async function saveModelConfig() {
+            if (!activeProject || !projectLedger) return;
+            const cfg = {};
+            document.querySelectorAll('.role-model-selector').forEach(el => {
+                const role = el.dataset.role;
+                const sel = el.querySelector('select');
+                const val = sel.value;
+                if (val) {
+                    const [provider, ...modelParts] = val.split('/');
+                    cfg[role] = { provider, name: modelParts.join('/') };
+                }
+            });
+            projectLedger.model_config = Object.keys(cfg).length > 0 ? cfg : undefined;
+            await fetch(`${API}/projects/${activeProject}/ledger`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(projectLedger)
+            });
+            showToast('Model config saved.');
+        }
+
+        connect();
+    </script>
+</body>
+</html>

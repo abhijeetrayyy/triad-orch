@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Triad Engine</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root{--bg-base:#0A0A0F;--bg-surface:#111118;--bg-elevated:#1A1A24;--bg-highlight:#22223A;--border-subtle:#1E1E2E;--border-default:#2A2A3E;--border-active:#4A4A6A;--text-primary:#E8E8F0;--text-secondary:#8888AA;--text-muted:#44445A;--text-inverse:#0A0A0F;--status-idle:#44445A;--status-planning:#6B7FFF;--status-executing:#22C55E;--status-reviewing:#F59E0B;--status-auditing:#A78BFA;--status-completed:#10B981;--status-failed:#EF4444;--status-paused:#FB923C;--agent-architect:#6B7FFF;--agent-builder:#22C55E;--agent-reviewer:#F59E0B;--agent-auditor:#A78BFA;--accent-primary:#6B7FFF;--accent-success:#22C55E;--accent-danger:#EF4444;--accent-warning:#F59E0B}
+        *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+        body{background:var(--bg-base);color:var(--text-primary);font-family:'Inter',system-ui,sans-serif;margin:0;padding:0;overflow:hidden;height:100vh}
+        .mono{font-family:'JetBrains Mono',monospace}
+        ::-webkit-scrollbar{width:4px}
+        ::-webkit-scrollbar-track{background:transparent}
+        ::-webkit-scrollbar-thumb{background:var(--border-default);border-radius:10px}
+        .app-layout{display:flex;height:100vh;width:100vw}
+        .nav-rail{width:48px;height:100vh;background:var(--bg-surface);border-right:1px solid var(--border-subtle);display:flex;flex-direction:column;align-items:center;padding:12px 0;gap:4px;flex-shrink:0}
+        .nav-item{width:36px;height:36px;border-radius:8px;border:none;background:transparent;color:var(--text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background .15s,color .15s}
+        .nav-item:hover{background:var(--bg-elevated);color:var(--text-primary)}
+        .nav-item.active{background:var(--bg-elevated);color:var(--accent-primary)}
+        .sidebar{width:260px;height:100vh;background:var(--bg-surface);border-right:1px solid var(--border-subtle);display:flex;flex-direction:column;flex-shrink:0}
+        .sidebar-header{padding:16px;border-bottom:1px solid var(--border-subtle);display:flex;justify-content:space-between;align-items:center}
+        .sidebar-header h2{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px}
+        .sidebar-add{width:24px;height:24px;border-radius:6px;border:1px solid var(--border-default);background:transparent;color:var(--text-muted);cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:14px;transition:all .15s}
+        .sidebar-add:hover{color:var(--accent-primary);border-color:var(--accent-primary)}
+        .sidebar-search{padding:8px 16px}
+        .sidebar-search input{width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--border-subtle);background:var(--bg-base);color:var(--text-secondary);font-size:11px;outline:none;font-family:'JetBrains Mono',monospace}
+        .sidebar-search input:focus{border-color:var(--border-active)}
+        .sidebar-list{flex:1;overflow-y:auto;padding:4px 0}
+        .sidebar-footer{padding:12px 16px;border-top:1px solid var(--border-subtle);display:flex;justify-content:space-between;align-items:center}
+        .sidebar-footer span{font-size:10px;color:var(--text-muted);font-family:'JetBrains Mono',monospace}
+        .ws-status{font-size:10px;font-weight:600}.ws-status.online{color:var(--accent-success)}.ws-status.offline{color:var(--text-muted)}
+        .project-card{padding:10px 12px;border-radius:8px;cursor:pointer;border:1px solid transparent;transition:all .15s;margin:2px 8px;display:flex;align-items:center;gap:8px}
+        .project-card:hover{background:var(--bg-elevated);border-color:var(--border-default)}
+        .project-card.active{background:var(--bg-elevated);border-color:var(--border-active)}
+        .project-card .project-name{font-size:13px;font-weight:500;color:var(--text-primary);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .status-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0;display:inline-block}
+        .status-dot.idle{background:var(--status-idle)}
+        .status-dot.planning{background:var(--status-planning);animation:pulse 1.5s infinite}
+        .status-dot.executing{background:var(--status-executing);animation:pulse 1.5s infinite}
+        .status-dot.reviewing{background:var(--status-reviewing);animation:pulse 1.5s infinite}
+        .status-dot.auditing{background:var(--status-auditing);animation:pulse 1.5s infinite}
+        .status-dot.paused{background:var(--status-paused)}
+        .status-dot.completed{background:var(--status-completed)}
+        .status-dot.failed{background:var(--status-failed)}
+        .status-dot.online{background:var(--accent-success)}
+        .status-dot.offline{background:var(--accent-danger)}
+        .status-dot.untested{background:var(--text-muted)}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+        .main-area{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
+        .top-bar{height:52px;padding:0 16px;background:var(--bg-surface);border-bottom:1px solid var(--border-subtle);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+        .top-bar .project-title{display:flex;align-items:center;gap:12px;min-width:0}
+        .top-bar .project-title h1{font-size:16px;font-weight:600;color:var(--text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .top-bar .top-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+        .status-badge{font-size:10px;font-weight:600;font-family:'JetBrains Mono',monospace;padding:2px 8px;border-radius:4px;letter-spacing:.5px;white-space:nowrap}
+        .status-badge.idle{background:rgba(68,68,90,.2);color:var(--status-idle)}
+        .status-badge.planning{background:rgba(107,127,255,.15);color:var(--status-planning)}
+        .status-badge.executing{background:rgba(34,197,94,.15);color:var(--status-executing)}
+        .status-badge.reviewing{background:rgba(245,158,11,.15);color:var(--status-reviewing)}
+        .status-badge.auditing{background:rgba(167,139,250,.15);color:var(--status-auditing)}
+        .status-badge.completed{background:rgba(16,185,129,.15);color:var(--status-completed)}
+        .status-badge.failed{background:rgba(239,68,68,.15);color:var(--status-failed)}
+        .status-badge.paused{background:rgba(251,146,60,.15);color:var(--status-paused)}
+        .loop-counter{font-size:11px;color:var(--text-muted);font-family:'JetBrains Mono',monospace}
+        .btn-primary{padding:6px 16px;background:var(--accent-primary);color:#fff;border:none;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;transition:opacity .15s}
+        .btn-primary:hover{opacity:.85}.btn-primary:disabled{opacity:.4;cursor:default}
+        .btn-secondary{padding:6px 12px;background:var(--bg-elevated);color:var(--text-secondary);border:1px solid var(--border-default);border-radius:6px;font-size:13px;cursor:pointer;transition:all .15s}
+        .btn-secondary:hover{color:var(--text-primary);border-color:var(--border-active)}
+        .btn-secondary:disabled{opacity:.4;cursor:default}
+        .btn-danger{padding:6px 12px;background:rgba(239,68,68,.15);color:var(--accent-danger);border:1px solid rgba(239,68,68,.3);border-radius:6px;font-size:13px;cursor:pointer;transition:all .15s}
+        .btn-danger:hover{background:rgba(239,68,68,.25)}
+        .content-area{flex:1;display:flex;overflow:hidden;min-height:0}
+        .content-left{flex:0 0 60%;display:flex;flex-direction:column;border-right:1px solid var(--border-subtle);overflow:hidden}
+        .content-right{flex:0 0 40%;display:flex;flex-direction:column;overflow:hidden}
+        .panel-header{padding:8px 12px;border-bottom:1px solid var(--border-subtle);font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);background:var(--bg-surface);flex-shrink:0}
+        .interruption-banner{display:flex;align-items:center;gap:12px;padding:8px 16px;background:var(--bg-elevated);border-bottom:1px solid var(--border-default);font-size:12px;flex-shrink:0}
+        .interruption-banner.error{border-left:3px solid var(--accent-danger)}
+        .interruption-banner.warning{border-left:3px solid var(--accent-warning)}
+        .resume-banner{margin:8px 12px;padding:10px 12px;border-radius:8px;background:var(--bg-elevated);border:1px solid var(--border-active);display:flex;align-items:center;gap:12px;font-size:12px}
+        .task-board{flex:1;overflow-y:auto;padding:8px}
+        .task-card{background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:8px;padding:12px;margin-bottom:8px;transition:border-color .2s}
+        .task-card.in-progress{border-color:var(--status-executing);box-shadow:0 0 0 1px rgba(34,197,94,.1)}
+        .task-card.completed{border-color:var(--border-subtle);opacity:.6}
+        .task-card.failed{border-color:var(--status-failed)}
+        .task-card.awaiting_review{border-color:var(--status-reviewing)}
+        .task-card.awaiting_audit{border-color:var(--status-auditing)}
+        .task-card.paused{border-color:var(--status-paused)}
+        .task-card.superseded{border-color:var(--border-subtle);opacity:.35}
+        .task-header{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+        .task-id{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-muted)}
+        .task-status-pill{font-size:10px;font-weight:600;font-family:'JetBrains Mono',monospace;padding:2px 8px;border-radius:999px;letter-spacing:.3px;background:rgba(68,68,90,.15);color:var(--status-idle)}
+        .task-status-pill.in_progress{background:rgba(34,197,94,.15);color:var(--status-executing)}
+        .task-status-pill.completed{background:rgba(16,185,129,.15);color:var(--status-completed)}
+        .task-status-pill.failed{background:rgba(239,68,68,.15);color:var(--status-failed)}
+        .task-status-pill.awaiting_review{background:rgba(245,158,11,.15);color:var(--status-reviewing)}
+        .task-status-pill.awaiting_audit{background:rgba(167,139,250,.15);color:var(--status-auditing)}
+        .task-status-pill.paused{background:rgba(251,146,60,.15);color:var(--status-paused)}
+        .task-desc{font-size:13px;color:var(--text-primary);line-height:1.4}
+        .task-meta{font-size:11px;color:var(--text-muted);margin-top:6px;font-family:'JetBrains Mono',monospace}
+        .task-notes{font-size:11px;color:var(--text-secondary);margin-top:4px;padding:4px 8px;background:var(--bg-base);border-radius:4px}
+        .task-files{margin-top:6px;display:flex;flex-wrap:wrap;gap:4px}
+        .file-tag{font-family:'JetBrains Mono',monospace;font-size:10px;background:var(--bg-elevated);border:1px solid var(--border-default);border-radius:4px;padding:2px 6px;color:var(--text-secondary)}
+        .retry-badge{font-size:10px;font-weight:600;font-family:'JetBrains Mono',monospace;padding:1px 6px;border-radius:999px;background:rgba(239,68,68,.15);color:var(--status-failed)}
+        .empty-state{display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font-size:13px}
+        .log-filters{display:flex;gap:4px;padding:6px 12px;border-bottom:1px solid var(--border-subtle);background:var(--bg-surface);flex-shrink:0;flex-wrap:wrap}
+        .log-filter{padding:2px 8px;border-radius:4px;border:1px solid var(--border-default);background:transparent;color:var(--text-muted);cursor:pointer;font-size:10px;font-weight:600;font-family:'JetBrains Mono',monospace;transition:all .15s}
+        .log-filter.active{background:var(--bg-elevated);color:var(--accent-primary);border-color:var(--accent-primary)}
+        .log-feed{flex:1;overflow-y:auto;padding:8px;background:var(--bg-base);font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.6}
+        .log-line{padding:1px 4px;border-radius:3px;white-space:pre-wrap;word-break:break-all}
+        .log-line.model{color:#818CF8}.log-line.tool{color:#34D399}.log-line.audit{color:#FCD34D}
+        .log-line.error{color:#F87171}.log-line.tick{color:#60A5FA}
+        .log-line.paused{color:#FB923C;font-weight:bold}.log-line.system{color:var(--text-muted)}
+        .bottom-panel{border-top:1px solid var(--border-subtle);background:var(--bg-surface);height:40px;transition:height .2s ease;overflow:hidden;flex-shrink:0;display:flex;flex-direction:column}
+        .bottom-panel.expanded{height:320px}
+        .panel-tabs{display:flex;align-items:center;gap:2px;padding:0 8px;height:40px;flex-shrink:0;border-bottom:1px solid var(--border-subtle)}
+        .panel-tab{padding:8px 12px;border:none;background:transparent;color:var(--text-muted);cursor:pointer;font-size:11px;font-weight:500;border-bottom:2px solid transparent;transition:all .15s}
+        .panel-tab.active{color:var(--accent-primary);border-bottom-color:var(--accent-primary)}
+        .panel-tab-toggle{margin-left:auto;padding:4px 8px;border:none;background:transparent;color:var(--text-muted);cursor:pointer;font-size:14px}
+        .panel-content{flex:1;overflow-y:auto;display:none}.panel-content.visible{display:block}.panel-content-inner{padding:12px}
+        .model-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+        .model-card{background:var(--bg-base);border:1px solid var(--border-subtle);border-radius:8px;padding:10px}
+        .model-card-header{display:flex;align-items:center;gap:6px;margin-bottom:8px}
+        .model-card select{width:100%;padding:4px 6px;border-radius:4px;border:1px solid var(--border-subtle);background:var(--bg-elevated);color:var(--text-primary);font-size:11px;margin-top:4px;font-family:'JetBrains Mono',monospace;outline:none}
+        .model-actions{display:flex;gap:8px;align-items:center;padding:8px 0 0}
+        .intent-editor textarea{width:100%;padding:8px;border-radius:6px;border:1px solid var(--border-subtle);background:var(--bg-base);color:var(--text-primary);font-size:13px;resize:vertical;min-height:80px;outline:none;font-family:'Inter',system-ui,sans-serif}
+        .intent-editor label{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:4px}
+        .intent-editor .field-group{margin-bottom:12px}
+        .intent-editor input[type=number]{padding:6px 8px;border-radius:6px;border:1px solid var(--border-subtle);background:var(--bg-base);color:var(--text-primary);font-size:13px;width:80px;outline:none;font-family:'JetBrains Mono',monospace}
+        .prompts-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+        .prompts-grid textarea{width:100%;padding:6px;border-radius:6px;border:1px solid var(--border-subtle);background:var(--bg-base);color:var(--text-primary);font-size:11px;resize:vertical;min-height:60px;max-height:80px;outline:none;font-family:'JetBrains Mono',monospace}
+        .state-display{font-family:'JetBrains Mono',monospace;font-size:12px;line-height:1.8}
+        .state-display .state-row{display:flex;padding:2px 0}
+        .state-display .state-label{color:var(--text-muted);width:140px;flex-shrink:0;text-transform:uppercase;font-size:10px}
+        .state-display .state-value{color:var(--text-primary)}
+        .state-display .state-section{margin-top:12px;padding-top:8px;border-top:1px solid var(--border-subtle)}
+        .state-display .state-section-title{font-size:10px;font-weight:600;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+        .history-entry{padding:6px 8px;border-bottom:1px solid var(--border-subtle);cursor:pointer}
+        .history-entry:hover{background:var(--bg-elevated)}
+        .memory-controls{display:flex;gap:8px;margin-bottom:8px}
+        .memory-controls input{flex:1;padding:6px 8px;border-radius:6px;border:1px solid var(--border-subtle);background:var(--bg-base);color:var(--text-secondary);font-size:11px;outline:none;font-family:'JetBrains Mono',monospace}
+        .memory-card{background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:6px;padding:8px;margin-bottom:6px}
+        .global-view{flex:1;display:flex;flex-direction:column;overflow:hidden}.global-view.hidden{display:none}.global-view-inner{flex:1;overflow-y:auto;padding:24px}
+        .modal-overlay{position:fixed;inset:0;background:rgba(10,10,15,.95);display:none;align-items:center;justify-content:center;z-index:100}
+        .modal-overlay.open{display:flex}
+        .modal-box{background:var(--bg-surface);border:1px solid var(--border-default);border-radius:16px;width:520px;max-height:80vh;overflow-y:auto}
+        .modal-header{padding:16px;border-bottom:1px solid var(--border-subtle);display:flex;justify-content:space-between;align-items:center}
+        .modal-header h2{font-size:16px;font-weight:600}
+        .modal-close{border:none;background:transparent;color:var(--text-muted);cursor:pointer;font-size:18px;padding:4px}
+        .modal-body{padding:16px}
+        .modal-body label{font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;display:block;margin-bottom:4px}
+        .modal-body input,.modal-body textarea{width:100%;padding:8px;border-radius:6px;border:1px solid var(--border-subtle);background:var(--bg-base);color:var(--text-primary);font-size:13px;outline:none;font-family:'Inter',system-ui,sans-serif}
+        .modal-body textarea{resize:vertical;min-height:80px}
+        .modal-footer{padding:12px 16px;border-top:1px solid var(--border-subtle);display:flex;gap:8px;justify-content:flex-end}
+        .toast{position:fixed;bottom:24px;right:24px;padding:10px 20px;border-radius:8px;font-size:12px;font-weight:600;transition:all .3s ease;z-index:200;opacity:0;transform:translateY(8px);pointer-events:none}
+        .toast.show{opacity:1;transform:translateY(0)}.toast.success{background:var(--accent-success);color:var(--text-inverse)}
+        .toast.error{background:var(--accent-danger);color:#fff}.toast.info{background:var(--accent-primary);color:#fff}
+        .direction-modal .modal-box{width:720px;max-height:85vh}
+        .direction-layout{display:flex;min-height:400px}
+        .direction-categories{width:180px;flex-shrink:0;border-right:1px solid var(--border-subtle);overflow-y:auto;padding:8px 0}
+        .direction-category{padding:6px 12px;cursor:pointer;font-size:12px;color:var(--text-muted);transition:all .1s;border-right:2px solid transparent}
+        .direction-category:hover{color:var(--text-secondary);background:var(--bg-elevated)}
+        .direction-category.active{color:var(--accent-primary);background:var(--bg-elevated);border-right-color:var(--accent-primary)}
+        .direction-options{flex:1;overflow-y:auto;padding:8px 12px}
+        .direction-search{width:100%;padding:6px 8px;border-radius:6px;border:1px solid var(--border-subtle);background:var(--bg-base);color:var(--text-secondary);font-size:11px;outline:none;margin-bottom:8px;font-family:'JetBrains Mono',monospace}
+        .direction-option{display:flex;align-items:flex-start;gap:8px;padding:4px 0;cursor:pointer;font-size:12px}
+        .direction-option input[type=checkbox]{margin-top:2px;accent-color:var(--accent-primary)}
+        .direction-option .option-desc{font-size:10px;color:var(--text-muted);display:block}
+        .direction-selected{padding:6px 12px;border-top:1px solid var(--border-subtle);font-size:11px;color:var(--text-muted)}
+        .direction-selected span{color:var(--accent-primary)}
+        .direction-target{padding:8px 12px;border-top:1px solid var(--border-subtle)}
+        .direction-target select{padding:4px 8px;border-radius:4px;border:1px solid var(--border-subtle);background:var(--bg-elevated);color:var(--text-primary);font-size:11px}
+        .direction-context{padding:4px 12px 8px;display:flex;gap:12px;font-size:11px;color:var(--text-muted)}
+        .direction-context label{display:flex;align-items:center;gap:4px;cursor:pointer}
+        .direction-context input[type=checkbox]{accent-color:var(--accent-primary)}
+        .direction-footer{padding:8px 12px;border-top:1px solid var(--border-subtle);display:flex;gap:8px;justify-content:flex-end}
+        .direction-preview{padding:12px;background:var(--bg-base);border:1px solid var(--border-subtle);border-radius:8px;margin:8px 0;max-height:300px;overflow-y:auto;font-family:'JetBrains Mono',monospace;font-size:12px;white-space:pre-wrap}
+    </style>
+</head>
+<body>
+    <div class="app-layout" id="app">
+        <nav class="nav-rail">
+            <button class="nav-item active" data-view="dashboard" title="Dashboard" onclick="navigate('dashboard')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+            <button class="nav-item" data-view="models" title="Models" onclick="navigate('models')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg></button>
+            <button class="nav-item" data-view="system" title="System" onclick="navigate('system')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg></button>
+        </nav>
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header"><h2>Projects</h2><button class="sidebar-add" onclick="openModal()" title="New Project">+</button></div>
+            <div class="sidebar-search"><input type="text" placeholder="filter projects..." id="projectSearch" oninput="filterProjects()"></div>
+            <div class="sidebar-list" id="projectList"></div>
+            <div class="sidebar-footer"><span>v2.0</span><span class="ws-status offline" id="wsStatus">OFFLINE</span></div>
+        </aside>
+        <div class="main-area">
+            <div id="interruptionBanner" class="interruption-banner" style="display:none"></div>
+            <div id="resumeBanner" class="resume-banner" style="display:none"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FB923C" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><div class="resume-text"><strong>Interrupted session available</strong> &#8212; <span id="resumeInfo">loading...</span></div><button class="btn-secondary" onclick="resumeFromCheckpoint()">Resume</button><button class="btn-secondary" onclick="dismissCheckpoint()">Dismiss</button></div>
+            <header class="top-bar" id="topBar" style="display:none">
+                <div class="project-title"><span class="status-badge idle" id="statusBadge">IDLE</span><h1 id="projectTitle">Project</h1><span class="loop-counter" id="loopCounter"></span></div>
+                <div class="top-actions"><button class="btn-secondary" id="btnGeneratePrompt" onclick="openDirectionEngine()">&#10022; Generate Prompt</button><button class="btn-secondary" id="btnPause" onclick="pauseProject()" disabled>&#9208; Pause</button><button class="btn-secondary" id="btnResume" onclick="resumeProject()" style="display:none">&#9654; Resume</button><button class="btn-danger" id="btnKill" onclick="killProject()" disabled>&#9632; Kill</button><button class="btn-primary" id="btnLaunch" onclick="launchSession()">&#9654; Launch</button></div>
+            </header>
+            <div id="viewDashboard" class="global-view">
+                <div id="dashboardContent" style="display:flex;flex:1;flex-direction:column;overflow:hidden;min-height:0">
+                    <div id="emptyState" class="empty-state" style="flex:1">
+                        <div style="text-align:center"><div style="font-size:14px;font-weight:600;margin-bottom:4px">Select a project</div><div style="font-size:11px;color:var(--text-muted)">or create a new one to get started</div></div>
+                    </div>
+                    <div id="projectContent" style="display:none;flex:1;flex-direction:column;overflow:hidden;min-height:0">
+                        <div class="content-area">
+                            <div class="content-left">
+                                <div class="panel-header">Task Board</div>
+                                <div class="task-board" id="taskBoard"></div>
+                            </div>
+                            <div class="content-right">
+                                <div class="panel-header">Live Log</div>
+                                <div class="log-filters">
+                                    <button class="log-filter active" data-filter="all" onclick="setLogFilter('all')">ALL</button>
+                                    <button class="log-filter" data-filter="model" onclick="setLogFilter('model')">MODEL</button>
+                                    <button class="log-filter" data-filter="tool" onclick="setLogFilter('tool')">TOOL</button>
+                                    <button class="log-filter" data-filter="audit" onclick="setLogFilter('audit')">AUDIT</button>
+                                    <button class="log-filter" data-filter="error" onclick="setLogFilter('error')">ERROR</button>
+                                    <button class="log-filter" data-filter="system" onclick="setLogFilter('system')">SYSTEM</button>
+                                </div>
+                                <div class="log-feed" id="logFeed"></div>
+                            </div>
+                        </div>
+                        <div class="bottom-panel" id="bottomPanel">
+                            <div class="panel-tabs">
+                                <button class="panel-tab" data-tab="intent" onclick="switchPanelTab('intent')">Intent</button>
+                                <button class="panel-tab" data-tab="prompts" onclick="switchPanelTab('prompts')">Prompts</button>
+                                <button class="panel-tab" data-tab="models" onclick="switchPanelTab('models')">Models</button>
+                                <button class="panel-tab" data-tab="state" onclick="switchPanelTab('state')">State</button>
+                                <button class="panel-tab" data-tab="history" onclick="switchPanelTab('history')">History</button>
+                                <button class="panel-tab" data-tab="memory" onclick="switchPanelTab('memory')">Memory</button>
+                                <button class="panel-tab-toggle" id="panelToggle" onclick="togglePanel()">&#9662;</button>
+                            </div>
+                            <div class="panel-content" id="tabIntent"><div class="panel-content-inner intent-editor"><div class="field-group"><label>Project Intent</label><textarea id="iIntent" placeholder="Describe the overall project goal..."></textarea></div><div class="field-group" style="display:flex;gap:12px;align-items:center"><label style="margin-bottom:0">Max Loops</label><input type="number" id="iMaxLoops" value="50" min="1" max="200"></div><button class="btn-primary" onclick="saveIntent()">Save Intent</button></div></div>
+                            <div class="panel-content" id="tabPrompts"><div class="panel-content-inner"><div class="prompts-grid"><div class="prompt-group"><label style="color:var(--agent-architect)">Architect Prompt</label><textarea id="iArchitect"></textarea></div><div class="prompt-group"><label style="color:var(--agent-builder)">Builder Prompt</label><textarea id="iBuilder"></textarea></div><div class="prompt-group"><label style="color:var(--agent-reviewer)">Reviewer Prompt</label><textarea id="iReviewer"></textarea></div><div class="prompt-group"><label style="color:var(--agent-auditor)">Auditor Prompt</label><textarea id="iAuditor"></textarea></div></div><button class="btn-primary" onclick="savePrompts()" style="margin-top:8px">Save Prompts</button></div></div>
+                            <div class="panel-content" id="tabModels"><div class="panel-content-inner"><div class="model-grid" id="modelGrid"></div><div class="model-actions"><button class="btn-secondary" onclick="testPanelModels()">Test All Models</button><button class="btn-primary" id="btnSaveModelConfig" onclick="saveModelConfig()">Save</button><span id="modelSaveHint" style="font-size:11px;color:var(--text-muted)"></span></div></div></div>
+                            <div class="panel-content" id="tabState"><div class="panel-content-inner state-display" id="stateDisplay"><div style="color:var(--text-muted);font-size:12px">Loading state...</div></div></div>
+                            <div class="panel-content" id="tabHistory"><div class="panel-content-inner"><div class="history-list" id="historyList"><div style="color:var(--text-muted);font-size:12px">Loading history...</div></div></div></div>
+                            <div class="panel-content" id="tabMemory"><div class="panel-content-inner"><div class="memory-controls"><input type="text" placeholder="Search lessons..." id="memorySearch" oninput="renderMemory()"><button class="btn-secondary" onclick="openLessonModal()">+ Add Lesson</button></div><div id="memoryList"></div></div></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div id="viewModels" class="global-view hidden"><div class="global-view-inner"><h2 style="font-size:20px;font-weight:600;margin-bottom:24px;color:var(--accent-primary)">Models &amp; Providers</h2><div id="globalModelStatus"></div><div style="margin-top:16px"><button class="btn-primary" onclick="refreshGlobalModels()">Test All Models</button></div></div></div>
+            <div id="viewSystem" class="global-view hidden"><div class="global-view-inner"><h2 style="font-size:20px;font-weight:600;margin-bottom:24px;color:var(--accent-primary)">System</h2><div style="margin-bottom:24px"><h3 style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px">Active Conductors</h3><div id="processList"><p style="font-size:12px;color:var(--text-muted)">No active sessions.</p></div></div><pre id="sysStatsRaw" class="mono" style="font-size:12px;color:var(--text-secondary);background:var(--bg-surface);padding:16px;border-radius:8px;border:1px solid var(--border-subtle);overflow:auto;max-height:60vh"></pre></div></div>
+        </div>
+    </div>
+    <div class="toast" id="toast"></div>
+    <div class="modal-overlay" id="modal"><div class="modal-box"><div class="modal-header"><h2>New Project</h2><button class="modal-close" onclick="closeModal()">&#215;</button></div><div class="modal-body"><label>Project Name</label><input type="text" id="mName" placeholder="e.g. my-ecommerce-site"><div style="height:12px"></div><label>Project Intent</label><textarea id="mIntent" placeholder="Describe the overall project goal..."></textarea></div><div class="modal-footer"><button class="btn-secondary" onclick="closeModal()">Cancel</button><button class="btn-primary" onclick="launchNew()">Initialize</button></div></div></div>
+    <div class="modal-overlay" id="lessonModal"><div class="modal-box"><div class="modal-header"><h2>Add Lesson</h2><button class="modal-close" onclick="closeLessonModal()">&#215;</button></div><div class="modal-body"><label>Task Description</label><input type="text" id="lessonTask" placeholder="What task was this for?"><div style="height:12px"></div><label>Lesson Learned</label><textarea id="lessonText" placeholder="What was learned?"></textarea></div><div class="modal-footer"><button class="btn-secondary" onclick="closeLessonModal()">Cancel</button><button class="btn-primary" onclick="saveManualLesson()">Save</button></div></div></div>
+    <div class="modal-overlay direction-modal" id="directionModal"><div class="modal-box"><div class="modal-header"><h2>&#10022; Direction Engine</h2><button class="modal-close" onclick="closeDirectionEngine()">&#215;</button></div><div class="modal-body" style="padding:0"><div class="direction-layout"><div class="direction-categories" id="dirCategories"></div><div style="flex:1;display:flex;flex-direction:column"><div style="padding:8px 12px 0"><input class="direction-search" type="text" placeholder="search options..." id="dirSearch" oninput="filterDirectionOptions()"></div><div class="direction-options" id="dirOptions"></div><div class="direction-selected" id="dirSelected">SELECTED (<span id="dirCount">0</span>)</div></div></div><div class="direction-target"><label>Target:</label><select id="dirTarget"><option value="intent">Intent</option><option value="architect_prompt">Architect Prompt</option><option value="builder_prompt">Builder Prompt</option><option value="sub_intent">New Sub-intent</option></select></div><div class="direction-context"><label><input type="checkbox" id="ctxCompleted" checked> Include completed tasks</label><label><input type="checkbox" id="ctxManifest" checked> Include file manifest</label><label><input type="checkbox" id="ctxWorkspace" checked> Include workspace state</label></div><div id="dirPreview" class="direction-preview" style="display:none"></div><div class="direction-footer"><button class="btn-secondary" id="dirBtnCopy" onclick="copyDirectionResult()" style="display:none">Copy</button><button class="btn-secondary" id="dirBtnApply" onclick="applyDirectionResult()" style="display:none">Apply</button><button class="btn-secondary" id="dirBtnRegenerate" onclick="generateDirection()" style="display:none">Regenerate</button><button class="btn-primary" id="dirBtnGenerate" onclick="generateDirection()">Generate Direction Prompt</button></div></div></div></div>
+    <div class="modal-overlay" id="intentChangeModal"><div class="modal-box"><div class="modal-header"><h2>Intent Changed</h2><button class="modal-close" onclick="closeIntentChangeModal()">&#215;</button></div><div class="modal-body" id="intentChangeBody"><p style="margin-bottom:12px;font-size:13px">The intent has changed during an active session. How do you want to proceed?</p></div><div class="modal-footer" id="intentChangeFooter"><button class="btn-secondary" onclick="handleIntentChange('re_plan')">Restart Planning</button><button class="btn-secondary" onclick="handleIntentChange('continue')">Continue Current Tasks</button><button class="btn-secondary" onclick="handleIntentChange('cancel')">Cancel (revert)</button></div></div></div>
+    <script>
+    const API=window.location.protocol==='file:'?'http://localhost:4002/api':window.location.origin.replace(/:\d+$/,'')+':4002/api';
+    const bridge=window.electronAPI||null;
+    let activeProject=null,projectLedger=null,ws=null,conductorState=null,currentCheckpoint=null,logFilter='all',memoryEntries=[],availableModels={},paused=false,interruptionTimeout=null,oldIntent='',panelOpen=false,activePanelTab='intent',dirResult=null,selectedDirections={},activeDirCategory='feature';
+    const AGENT_ROLES=['architect','builder','reviewer','auditor'];
+    const STATUS_COLORS={idle:'#44445A',planning:'#6B7FFF',executing:'#22C55E',reviewing:'#F59E0B',auditing:'#A78BFA',completed:'#10B981',failed:'#EF4444',paused:'#FB923C'};
+    function showToast(msg,t){t=t||'success';const e=document.getElementById('toast');e.textContent=msg;e.className='toast show '+t;setTimeout(()=>{e.className='toast '+t},2500)}
+    function connect(){ws=new WebSocket('ws://localhost:4002')
+    ws.onopen=()=>{document.getElementById('wsStatus').textContent='ONLINE';document.getElementById('wsStatus').className='ws-status online';fetchProjects()}
+    ws.onmessage=(e)=>{const d=JSON.parse(e.data);if(d.type==='ledger_update'&&d.projectName===activeProject){projectLedger=d.ledger;renderBoard()}
+    if(d.type==='log'&&d.projectName===activeProject)appendLog(d.message)
+    if(d.type==='resume_prompt'&&d.projectName===activeProject){currentCheckpoint=d.checkpoint;showResumeBanner(d.checkpoint)}
+    if(d.type==='engine_paused'&&d.projectName===activeProject){paused=true;updatePauseUI()}
+    if(d.type==='engine_resumed'&&d.projectName===activeProject){paused=false;updateResumeUI()}
+    if(d.type==='interruption'&&d.projectName===activeProject)showInterruptionBanner(d)
+    if(d.type==='interruption_cleared'&&d.projectName===activeProject)clearInterruptionBanner()}
+    ws.onclose=()=>{document.getElementById('wsStatus').textContent='OFFLINE';document.getElementById('wsStatus').className='ws-status offline';setTimeout(connect,2000)}}
+    function navigate(v){document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));document.querySelector('.nav-item[data-view="'+v+'"]').classList.add('active');['dashboard','models','system'].forEach(id=>{document.getElementById('view'+id.charAt(0).toUpperCase()+id.slice(1)).classList.add('hidden')});document.getElementById('view'+v.charAt(0).toUpperCase()+v.slice(1)).classList.remove('hidden');if(v==='system')refreshSystem();if(v==='models')refreshGlobalModels()}
+    async function fetchProjects(){try{const r=await fetch(API+'/projects');const list=await r.json();let a=[];if(bridge)try{a=await bridge.getActiveConductors()||[]}catch(e){}document.getElementById('projectList').innerHTML=list.length===0?'<div style="padding:16px;font-size:12px;color:var(--text-muted);text-align:center">No projects yet</div>':list.map(p=>{const ac=a.find(x=>x.name===p);return'<div class="project-card '+(activeProject===p?'active':'')+'" onclick="selectProject(\''+p+'\')"><span class="status-dot '+(ac?ac.status:'idle')+'"></span><span class="project-name">'+p+'</span>'+(ac?'<span style="font-size:9px;color:var(--text-muted)">'+ac.status+'</span>':'')+'</div>'}).join('')}catch(e){}}
+    function filterProjects(){const q=(document.getElementById('projectSearch').value||'').toLowerCase();document.querySelectorAll('.project-card').forEach(c=>{c.style.display=c.querySelector('.project-name').textContent.toLowerCase().includes(q)?'':'none'})}
+    async function selectProject(p){activeProject=p;document.getElementById('logFeed').innerHTML='<div class="log-line system">--- session started ---</div>';document.getElementById('topBar').style.display='';document.getElementById('projectContent').style.display='flex';document.getElementById('emptyState').style.display='none';document.getElementById('projectTitle').textContent=p;closePanel();clearInterruptionBanner()
+    try{const r=await fetch(API+'/projects/'+p+'/ledger');const d=await r.json();projectLedger=d.ledger;document.getElementById('iIntent').value=projectLedger.global_intent||'';document.getElementById('iMaxLoops').value=projectLedger.max_loops||50;document.getElementById('iArchitect').value=projectLedger.system_prompts?.architect||'';document.getElementById('iBuilder').value=projectLedger.system_prompts?.builder||'';document.getElementById('iReviewer').value=projectLedger.system_prompts?.reviewer||'';document.getElementById('iAuditor').value=projectLedger.system_prompts?.auditor||'';oldIntent=projectLedger.global_intent||'';renderBoard();await fetchConductorState();await loadCheckpoint();await loadHistory();await loadMemory();updateModelGrid();fetchProjects()}catch(e){console.error(e)}}
+    async function loadCheckpoint(){if(!activeProject)return;try{const r=await fetch(API+'/projects/'+activeProject+'/checkpoint');if(r.ok){currentCheckpoint=await r.json();showResumeBanner()}}catch(e){}}
+    function showResumeBanner(){const b=document.getElementById('resumeBanner');if(currentCheckpoint&&currentCheckpoint.status!=='completed'&&currentCheckpoint.interruption_reason!=='user_pause'){b.style.display='';document.getElementById('resumeInfo').textContent='Task '+currentCheckpoint.current_task_id+' - '+currentCheckpoint.loop_count+' loops done'}else b.style.display='none'}
+    function resumeFromCheckpoint(){if(!bridge||!activeProject||!currentCheckpoint)return;bridge.startProject(activeProject,projectLedger?.global_intent||'').then(r=>{if(r?.success)showToast('Resuming from checkpoint','success');else showToast('Failed to resume','error');document.getElementById('resumeBanner').style.display='none';setTimeout(fetchConductorState,1000)})}
+    function dismissCheckpoint(){currentCheckpoint=null;document.getElementById('resumeBanner').style.display='none'}
+    async function fetchConductorState(){if(!bridge||!activeProject)return;try{const s=await bridge.getProjectState(activeProject);if(s){conductorState=s;updateConductorUI()}}catch(e){}}
+    function updateConductorUI(){if(!conductorState){document.getElementById('statusBadge').textContent='IDLE';document.getElementById('statusBadge').className='status-badge idle';document.getElementById('btnLaunch').style.display='';document.getElementById('btnPause').disabled=true;document.getElementById('btnResume').style.display='none';document.getElementById('btnKill').disabled=true;document.getElementById('loopCounter').textContent='';return}
+    const st=conductorState.status||'idle';document.getElementById('statusBadge').textContent=st.toUpperCase();document.getElementById('statusBadge').className='status-badge '+st;document.getElementById('loopCounter').textContent='Loop '+(conductorState.loop_count||0)
+    if(st==='paused'){document.getElementById('btnLaunch').style.display='none';document.getElementById('btnPause').style.display='none';document.getElementById('btnResume').style.display='';document.getElementById('btnKill').disabled=false;paused=true;expandPanel('models')}
+    else if(st==='executing'||st==='planning'||st==='reviewing'||st==='auditing'){document.getElementById('btnLaunch').style.display='none';document.getElementById('btnPause').style.display='';document.getElementById('btnPause').disabled=false;document.getElementById('btnResume').style.display='none';document.getElementById('btnKill').disabled=false;paused=false;closePanel()}
+    else{document.getElementById('btnLaunch').style.display='';document.getElementById('btnPause').style.display='none';document.getElementById('btnResume').style.display='none';document.getElementById('btnKill').disabled=true;paused=false;closePanel()}
+    renderBoard()}
+    function launchSession(){if(!activeProject)return;if(bridge)bridge.startProject(activeProject,document.getElementById('iIntent').value).then(r=>{if(r?.success){showToast('Engine started','success');dismissCheckpoint()}else showToast('Failed','error');setTimeout(fetchConductorState,1000)})}
+    function killProject(){if(!activeProject||!bridge)return;bridge.stopProject(activeProject).then(()=>{showToast('Engine stopped','info');setTimeout(fetchConductorState,500)})}
+    function pauseProject(){if(!activeProject||!bridge)return;bridge.pauseProject(activeProject).then(()=>{showToast('Paused','info');fetchConductorState()})}
+    function resumeProject(){if(!activeProject||!bridge)return;bridge.resumeProject(activeProject,gatherModelConfig()).then(()=>{showToast('Resumed','success');fetchConductorState()})}
+    function updatePauseUI(){appendLog('[SYSTEM] ENGINE PAUSED - waiting for resume');if(currentCheckpoint?.current_task_id)appendLog('[SYSTEM] Current task: '+currentCheckpoint.current_task_id);appendLog('[SYSTEM] Waiting for resume...')}
+    function updateResumeUI(){appendLog('[SYSTEM] ENGINE RESUMED')}
+    function showInterruptionBanner(d){const b=document.getElementById('interruptionBanner');let title='Interruption',sub='';let cls='interruption-banner error'
+    switch(d.interruption_type){case'rate_limit':title='Rate limited';sub='Auto-resuming in 60s or switch model';if(d.auto_resume_seconds){sub='Auto-resuming in '+d.auto_resume_seconds+'s or switch model';startInterruptionCountdown(d.auto_resume_seconds)};cls='interruption-banner warning';break
+    case'quota':title='API quota exhausted';sub='Switch model to continue.';break
+    case'auth_failure':title='API key rejected';sub='Update .env and click Resume.';break
+    case'network':title='Network error';sub='Retried 3 times.';break
+    case'model_not_found':title='Model not found';sub='Switch model to continue.';break}
+    b.innerHTML='<span class="interruption-icon">&#9888;</span><div class="interruption-text"><strong>'+title+'</strong><span class="interruption-sub">'+sub+'</span></div><button onclick="expandPanel(\'models\')">Switch Model</button><button onclick="resumeProject()">Resume Now</button>';b.style.display='';b.className=cls}
+    function clearInterruptionBanner(){document.getElementById('interruptionBanner').style.display='none';if(interruptionTimeout){clearInterval(interruptionTimeout);interruptionTimeout=null}}
+    function startInterruptionCountdown(s){if(interruptionTimeout)clearInterval(interruptionTimeout);let r=s;interruptionTimeout=setInterval(()=>{r--;const sub=document.querySelector('.interruption-sub');if(sub)sub.textContent='Auto-resuming in '+r+'s';if(r<=0){clearInterval(interruptionTimeout);interruptionTimeout=null;resumeProject()}},1000)}
+    function switchPanelTab(tab){activePanelTab=tab;document.querySelectorAll('.panel-tab').forEach(t=>t.classList.remove('active'));document.querySelector('.panel-tab[data-tab="'+tab+'"]').classList.add('active');document.querySelectorAll('.panel-content').forEach(c=>c.classList.remove('visible'));document.getElementById('tab'+tab.charAt(0).toUpperCase()+tab.slice(1)).classList.add('visible');if(!panelOpen){panelOpen=true;document.getElementById('bottomPanel').classList.add('expanded');document.getElementById('panelToggle').textContent='&#9650;'}if(tab==='state')renderStateTab();if(tab==='memory')renderMemory()}
+    function togglePanel(){panelOpen=!panelOpen;const p=document.getElementById('bottomPanel');if(panelOpen){p.classList.add('expanded');document.getElementById('panelToggle').textContent='&#9650;';document.getElementById('tab'+activePanelTab.charAt(0).toUpperCase()+activePanelTab.slice(1)).classList.add('visible');document.querySelector('.panel-tab[data-tab="'+activePanelTab+'"]').classList.add('active')}else{p.classList.remove('expanded');document.getElementById('panelToggle').textContent='&#9662;';document.querySelectorAll('.panel-content').forEach(c=>c.classList.remove('visible'));document.querySelectorAll('.panel-tab').forEach(t=>t.classList.remove('active'))}}
+    function closePanel(){panelOpen=false;document.getElementById('bottomPanel').classList.remove('expanded');document.getElementById('panelToggle').textContent='&#9662;';document.querySelectorAll('.panel-content').forEach(c=>c.classList.remove('visible'));document.querySelectorAll('.panel-tab').forEach(t=>t.classList.remove('active'))}
+    function expandPanel(tab){switchPanelTab(tab)}
+    function gatherModelConfig(){const c={};AGENT_ROLES.forEach(r=>{const pv=document.getElementById('modelProvider-'+r)?.value;const mv=document.getElementById('modelModel-'+r)?.value;if(pv&&mv)c[r]={provider:pv,name:mv}});return c}
+    function updateModelGrid(){const grid=document.getElementById('modelGrid');const mc=projectLedger?.model_config||{};grid.innerHTML=AGENT_ROLES.map(r=>{const cfg=mc[r]||{provider:'DEEPSEEK',name:'deepseek-chat'};const models=availableModels[cfg.provider]||[cfg.name];return'<div class="model-card"><div class="model-card-header"><span class="status-dot untested" id="modelDot-'+r+'"></span><span style="font-weight:600;font-size:12px;color:var(--agent-'+r+')">'+r.toUpperCase()+'</span><span style="font-size:10px;color:var(--text-muted);font-family:JetBrains Mono,monospace" id="modelLatency-'+r+'"></span></div><select id="modelProvider-'+r+'" onchange="updateModelModels(\''+r+'\')">'+['DEEPSEEK','OPENROUTER','OPENCODE'].map(p=>'<option value="'+p+'" '+(p===cfg.provider?'selected':'')+'>'+p+'</option>').join('')+'</select><select id="modelModel-'+r+'">'+models.map(m=>'<option value="'+m+'" '+(m===cfg.name?'selected':'')+'>'+m+'</option>').join('')+'</select><div class="model-error" id="modelError-'+r+'"></div></div>'}).join('');updateModelSaveHint()}
+    function updateModelSaveHint(){const h=document.getElementById('modelSaveHint');if(paused)h.textContent='Save & Apply on Resume';else if(conductorState&&!['idle','completed','failed'].includes(conductorState.status))h.textContent='Changes apply on next launch';else h.textContent=''}
+    async function updateModelModels(r){const pv=document.getElementById('modelProvider-'+r).value;const models=availableModels[pv]||[];const sel=document.getElementById('modelModel-'+r);sel.innerHTML=models.map(m=>'<option value="'+m+'">'+m+'</option>').join('');if(models.length)sel.value=models[0]}
+    async function saveModelConfig(){if(!activeProject)return;const cfg=gatherModelConfig();try{await fetch(API+'/projects/'+activeProject+'/ledger',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ledger:{...projectLedger,model_config:cfg}})});if(paused&&bridge)bridge.resumeProject(activeProject,cfg).then(()=>showToast('Model config applied on resume','success'));showToast('Model config saved','success')}catch(e){showToast('Failed','error')}}
+    async function saveIntent(){if(!activeProject||!projectLedger)return;const ni=document.getElementById('iIntent').value;const ml=parseInt(document.getElementById('iMaxLoops').value)||50;if(oldIntent&&oldIntent!==ni&&conductorState&&!['idle','completed','failed'].includes(conductorState.status)){document.getElementById('intentChangeModal').classList.add('open');return}
+    projectLedger.global_intent=ni;projectLedger.max_loops=ml;await saveLedger()}
+    function closeIntentChangeModal(){document.getElementById('intentChangeModal').classList.remove('open')}
+    async function handleIntentChange(action){closeIntentChangeModal();const ni=document.getElementById('iIntent').value;const ml=parseInt(document.getElementById('iMaxLoops').value)||50;if(action==='cancel'){document.getElementById('iIntent').value=oldIntent;showToast('Reverted','info');return}
+    projectLedger.global_intent=ni;projectLedger.max_loops=ml;await saveLedger();if(action==='re_plan'){try{await fetch(API+'/projects/'+activeProject+'/intent-change',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'re_plan',intent:ni})});showToast('Re-planning','info')}catch(e){showToast('Failed','error')}}else showToast('Intent updated','success');oldIntent=ni}
+    async function saveLedger(){if(!activeProject||!projectLedger)return;try{await fetch(API+'/projects/'+activeProject+'/ledger',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ledger:projectLedger})});showToast('Saved','success')}catch(e){showToast('Failed','error')}}
+    async function savePrompts(){if(!activeProject||!projectLedger)return;projectLedger.system_prompts={architect:document.getElementById('iArchitect').value,builder:document.getElementById('iBuilder').value,reviewer:document.getElementById('iReviewer').value,auditor:document.getElementById('iAuditor').value};await saveLedger()}
+    function renderBoard(){const board=document.getElementById('taskBoard');const queue=conductorState?.task_queue||projectLedger?.task_queue||[];if(!queue.length){board.innerHTML='<div class="empty-state">No tasks. Launch the engine.</div>';return}
+    board.innerHTML=queue.map(t=>{const s=t.status||'pending';const ic=conductorState?.current_task_id===t.id;const files=t.files_impacted||[];const ret=t.retries||t.retry_count||0;const notes=t.reviewer_notes||t.auditor_notes||'';return'<div class="task-card '+s+(ic?' in-progress':'')+'"><div class="task-header"><span class="task-id">'+t.id+'</span><span class="task-status-pill '+s+'">'+s.replace('_',' ').toUpperCase()+'</span>'+(ic&&paused?'<span class="task-status-pill paused">PAUSED</span>':'')+(ret?'<span class="retry-badge">'+ret+'x retry</span>':'')+'</div><div class="task-desc">'+t.description+'</div>'+(notes?'<div class="task-notes">'+notes.substring(0,120)+'</div>':'')+(files.length?'<div class="task-files">'+files.map(f=>'<span class="file-tag">'+f+'</span>').join('')+'</div>':'')+'</div>'}).join('')}
+    function detectLogType(m){if(m.includes('[MODEL]'))return'model';if(m.includes('[Tool]')||m.includes('Action Result')||m.includes('Command'))return'tool';if(m.includes('Auditor')||m.includes('Audit')||m.includes('PASS')||m.includes('FAILED'))return'audit';if(/error|fail/i.test(m))return'error';if(m.includes('Tick')||m.includes('---'))return'tick';if(m.includes('PAUSED')||m.includes('RESUMED'))return'paused';return'system'}
+    function setLogFilter(f){logFilter=f;document.querySelectorAll('.log-filter').forEach(b=>b.classList.toggle('active',b.dataset.filter===f));document.querySelectorAll('.log-line').forEach(l=>l.style.display=(f==='all'||f===l.dataset.logType)?'':'none')}
+    function appendLog(m){const feed=document.getElementById('logFeed');const type=detectLogType(m);if(logFilter!=='all'&&logFilter!==type)return;const d=document.createElement('div');d.className='log-line '+type;d.dataset.logType=type;d.textContent='> '+m;feed.appendChild(d);feed.scrollTop=feed.scrollHeight}
+    function renderStateTab(){const el=document.getElementById('stateDisplay');if(!currentCheckpoint){el.innerHTML='<div style="color:var(--text-muted)">No checkpoint data.</div>';return}
+    const cp=currentCheckpoint;const total=cp.tasks?cp.tasks.length:0;const done=cp.tasks?cp.tasks.filter(t=>t.status==='completed').length:0;const ret=cp.tasks?cp.tasks.reduce((s,t)=>s+(t.retry_count||0),0):0;const created=cp.file_manifest?.created||[];const modified=cp.file_manifest?.modified||[]
+    el.innerHTML='<div class="state-section"><div class="state-section-title">Session</div><div class="state-row"><span class="state-label">Session</span><span class="state-value">'+(cp.session_id||'N/A')+'</span></div><div class="state-row"><span class="state-label">Loops</span><span class="state-value">'+(cp.loop_count||0)+'</span></div><div class="state-row"><span class="state-label">Status</span><span class="state-value" style="color:'+(STATUS_COLORS[cp.status]||'#888')+'">'+((cp.status||'unknown').toUpperCase())+'</span></div></div><div class="state-section"><div class="state-section-title">Tasks</div><div class="state-row"><span class="state-label">Completed</span><span class="state-value">'+done+'/'+total+'</span></div><div class="state-row"><span class="state-label">Retries</span><span class="state-value">'+ret+'</span></div></div><div class="state-section"><div class="state-section-title">Files</div><div class="state-row"><span class="state-label">Created</span><span class="state-value">'+(created.length?created.join(', '):'(none)')+'</span></div><div class="state-row"><span class="state-label">Modified</span><span class="state-value">'+(modified.length?modified.join(', '):'(none)')+'</span></div></div>'}
+    async function loadHistory(){if(!activeProject)return;try{const r=await fetch(API+'/projects/'+activeProject+'/logs');const s=await r.json();const el=document.getElementById('historyList');if(!s.length){el.innerHTML='<div style="color:var(--text-muted)">No history.</div>';return}
+    el.innerHTML=s.map(s=>'<div class="history-entry" onclick="loadSessionLog(\''+(s.session_id||s)+'\')"><div class="history-meta">'+(s.session_id||s)+'</div><div class="history-line">view log</div></div>').join('')}catch(e){}}
+    async function loadSessionLog(sid){if(!activeProject)return;try{const r=await fetch(API+'/projects/'+activeProject+'/logs/'+encodeURIComponent(sid));const text=await r.text();const lines=text.split('\n').filter(Boolean).slice(0,200);document.getElementById('historyList').innerHTML=lines.map(l=>'<div class="history-entry"><span class="history-line">'+l+'</span></div>').join('')}catch(e){}}
+    async function loadMemory(){try{const r=await fetch(API+'/global-memory');if(r.ok)memoryEntries=await r.json();renderMemory()}catch(e){renderMemory()}}
+    function renderMemory(){const q=(document.getElementById('memorySearch')?.value||'').toLowerCase();const f=memoryEntries.filter(e=>(e.task||'').toLowerCase().includes(q)||(e.lesson||'').toLowerCase().includes(q));const el=document.getElementById('memoryList');if(!el)return;el.innerHTML=f.length===0?'<div style="color:var(--text-muted)">No lessons.</div>':f.map(e=>'<div class="memory-card"><div class="memory-project">'+(e.project||'?')+' - '+(e.task||'?')+'</div><div class="memory-lesson">'+(e.lesson||'')+'</div></div>').join('')}
+    function openLessonModal(){document.getElementById('lessonModal').classList.add('open')}
+    function closeLessonModal(){document.getElementById('lessonModal').classList.remove('open')}
+    async function saveManualLesson(){const t=document.getElementById('lessonTask').value;const l=document.getElementById('lessonText').value;if(!t||!l)return;try{await fetch(API+'/projects/'+activeProject+'/ledger',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ledger:projectLedger})});showToast('Lesson saved','success');closeLessonModal()}catch(e){showToast('Error','error')}}
+    async function refreshSystem(){try{const sr=await fetch(API+'/system/stats');const stats=await sr.json();document.getElementById('sysStatsRaw').textContent=JSON.stringify(stats,null,2);let a=[];if(bridge)try{a=await bridge.getActiveConductors()||[]}catch(e){}document.getElementById('processList').innerHTML=!a||!a.length?'<p style="font-size:12px;color:var(--text-muted)">No active sessions.</p>':a.map(p=>'<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:8px;margin-bottom:6px"><div style="display:flex;align-items:center;gap:8px"><span class="status-dot executing"></span><span style="font-size:13px;font-weight:500">'+p.name+'</span><span style="font-size:10px;color:var(--text-muted)">'+(p.status||'running')+'</span></div><button class="btn-danger" onclick="bridge.stopProject(\''+p.name+'\')" style="font-size:10px;padding:4px 10px">KILL</button></div>').join('')}catch(e){}}
+    async function refreshGlobalModels(){const el=document.getElementById('globalModelStatus');el.innerHTML='<p style="color:var(--text-muted)">Testing...</p>';try{const r=await fetch(API+'/models/status');const d=await r.json();el.innerHTML='<div style="display:flex;flex-direction:column;gap:8px">'+Object.entries(d.status).map(([role,s])=>'<div style="display:flex;align-items:center;justify-content:space-between;padding:12px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:8px"><div style="display:flex;align-items:center;gap:8px"><span style="font-weight:600">'+role+'</span><span style="font-size:10px;color:var(--text-muted)">'+(d.models[role]?.provider||'?')+'/'+(d.models[role]?.name||'?')+'</span></div><div style="display:flex;align-items:center;gap:8px"><span style="font-size:10px;color:var(--text-muted)">'+s.latency+'ms</span><span class="status-dot '+(s.ok?'online':'offline')+'"></span></div></div>').join('')+'</div>'}catch(e){el.innerHTML='<p style="color:var(--accent-danger)">Failed</p>'}}
+    async function testPanelModels(){try{const r=await fetch(API+'/models/status');const d=await r.json();Object.entries(d.status).forEach(([role,s])=>{AGENT_ROLES.forEach(r=>{const dot=document.getElementById('modelDot-'+r);const lat=document.getElementById('modelLatency-'+r);if(dot){dot.className='status-dot '+(s.ok?'online':'offline');if(lat)lat.textContent=s.ok?s.latency+'ms':'ERR'}});const err=document.getElementById('modelError-'+role.toLowerCase().replace(/_primary|_fallback/g,''));if(err&&!s.ok)err.textContent=s.error||''})}catch(e){}}
+    async function fetchAvailableModels(){try{const r=await fetch(API+'/models/list');if(r.ok){availableModels=await r.json();updateModelGrid()}}catch(e){}}
+    function openModal(){document.getElementById('modal').classList.add('open')}
+    function closeModal(){document.getElementById('modal').classList.remove('open')}
+    function launchNew(){const n=document.getElementById('mName').value;const i=document.getElementById('mIntent').value;if(!n||!i)return;if(bridge)bridge.startProject(n,i).then(()=>{closeModal();setTimeout(fetchProjects,1000);setTimeout(()=>selectProject(n),1500)})}
+    const DIRECTION_CATEGORIES=[{id:'feature',name:'Feature Direction'},{id:'architecture',name:'Architecture'},{id:'ui_ux',name:'UI/UX'},{id:'code_quality',name:'Code Quality'},{id:'performance',name:'Performance'},{id:'security',name:'Security'},{id:'accessibility',name:'Accessibility'},{id:'seo',name:'SEO/Meta'},{id:'testing',name:'Testing'},{id:'deployment',name:'Deployment'},{id:'i18n',name:'i18n'},{id:'analytics',name:'Analytics'},{id:'dx',name:'Developer Experience'},{id:'content',name:'Content/Copy'},{id:'business',name:'Business Logic'},{id:'data',name:'Data Handling'},{id:'state_mgmt',name:'State Management'},{id:'api',name:'API/Integration'},{id:'refactor',name:'Refactor'},{id:'research',name:'Research'},{id:'standards',name:'Global Standards'},{id:'agency',name:'Agency/Portfolio'},{id:'custom',name:'Custom Direction'}];
+    const DIRECTION_OPTIONS={feature:[{id:'dark_mode',label:'Add dark mode toggle',desc:'System dark/light mode'},{id:'loading_skeletons',label:'Add loading skeletons',desc:'Skeleton UI for async content'},{id:'toast',label:'Add toast notifications',desc:'Non-blocking feedback UI'},{id:'search',label:'Add search functionality',desc:'Client-side or server search'},{id:'filters',label:'Add filters/sort controls',desc:'Multi-faceted filtering'},{id:'empty_states',label:'Add empty states',desc:'Zero-content states'},{id:'pagination',label:'Add pagination',desc:'Numbered pagination'},{id:'modals',label:'Add modal/dialog system',desc:'Accessible overlays'},{id:'forms',label:'Add form validation',desc:'Inline error messages'}],
+    architecture:[{id:'split',label:'Split into components',desc:'Decompose monolithic files'},{id:'service_layer',label:'Add service layer',desc:'Abstract data fetching'},{id:'caching',label:'Add caching layer',desc:'Memoize computations'},{id:'routing',label:'Implement routing',desc:'Client-side route management'}],
+    ui_ux:[{id:'spacing',label:'Consistent spacing system',desc:'4/8/16/24/32px grid'},{id:'design_tokens',label:'Design tokens',desc:'CSS custom properties'},{id:'micro_animations',label:'Micro-animations',desc:'Purposeful motion'},{id:'responsive',label:'Responsive layout',desc:'320-2560px'},{id:'focus_styles',label:'Focus styles for keyboard',desc:'Visible focus ring'}],
+    code_quality:[{id:'strict_ts',label:'TypeScript strict mode',desc:'Strict null checks'},{id:'dry',label:'Eliminate duplication',desc:'Extract repeated patterns'},{id:'error_handling',label:'Improve error handling',desc:'All async try/catch'},{id:'naming',label:'Improve naming',desc:'Self-documenting names'}],
+    performance:[{id:'code_split',label:'Code splitting',desc:'Lazy load code'},{id:'virtual_scroll',label:'Virtual scrolling',desc:'Render visible rows only'},{id:'memoization',label:'Memoization',desc:'Cache pure functions'},{id:'bundle_size',label:'Reduce bundle size',desc:'Audit dependencies'}],
+    security:[{id:'sanitize',label:'Input sanitization',desc:'Sanitize at boundary'},{id:'csp',label:'Content Security Policy',desc:'Restrict resource origins'},{id:'auth',label:'Authentication',desc:'OAuth verification'}],
+    accessibility:[{id:'semantic_html',label:'Semantic HTML',desc:'Correct elements'},{id:'aria',label:'ARIA labels',desc:'Screen reader descriptions'},{id:'keyboard_nav',label:'Keyboard navigation',desc:'Tab order, focus'}],
+    seo:[{id:'meta',label:'Meta tags',desc:'Per-page meta content'},{id:'og',label:'Open Graph tags',desc:'Social preview'},{id:'jsonld',label:'Structured data',desc:'Schema.org markup'}],
+    testing:[{id:'unit',label:'Unit tests',desc:'Pure function coverage'},{id:'integration',label:'Integration tests',desc:'API route testing'},{id:'e2e',label:'E2E tests',desc:'Critical path flows'}],
+    deployment:[{id:'health',label:'Health check',desc:'/health endpoint'},{id:'docker',label:'Docker',desc:'Containerized deployment'},{id:'cicd',label:'CI/CD pipeline',desc:'Automated build/test/deploy'}],
+    custom:[{id:'custom_text',label:'Custom Direction',desc:'Free-form direction text'}]};
+    function openDirectionEngine(){document.getElementById('directionModal').classList.add('open');renderDirectionCategories();renderDirectionOptions();document.getElementById('dirPreview').style.display='none';document.getElementById('dirBtnGenerate').style.display='';document.getElementById('dirBtnRegenerate').style.display='none';document.getElementById('dirBtnApply').style.display='none';document.getElementById('dirBtnCopy').style.display='none'}
+    function closeDirectionEngine(){document.getElementById('directionModal').classList.remove('open')}
+    function renderDirectionCategories(){document.getElementById('dirCategories').innerHTML=DIRECTION_CATEGORIES.map(c=>'<div class="direction-category '+(c.id===activeDirCategory?'active':'')+'" onclick="selectDirCategory(\''+c.id+'\')">'+c.name+'</div>').join('')}
+    function selectDirCategory(id){activeDirCategory=id;renderDirectionCategories();renderDirectionOptions()}
+    function renderDirectionOptions(){const opts=DIRECTION_OPTIONS[activeDirCategory]||[];const search=(document.getElementById('dirSearch')?.value||'').toLowerCase();const filtered=opts.filter(o=>o.label.toLowerCase().includes(search)||o.desc.toLowerCase().includes(search));const el=document.getElementById('dirOptions')
+    if(activeDirCategory==='custom'){el.innerHTML='<div><textarea id="customDirectionText" placeholder="Describe your custom direction..." style="width:100%;padding:8px;border-radius:6px;border:1px solid var(--border-subtle);background:var(--bg-base);color:var(--text-primary);font-size:12px;min-height:80px;resize:vertical;outline:none;font-family:Inter,system-ui,sans-serif"></textarea></div>';return}
+    el.innerHTML=filtered.map(o=>'<div class="direction-option"><input type="checkbox" id="dir-'+o.id+'" '+(selectedDirections[o.id]?'checked':'')+' onchange="toggleDirection(\''+o.id+'\')"><div><label for="dir-'+o.id+'">'+o.label+'</label><span class="option-desc">'+o.desc+'</span></div></div>').join('')||'<div style="color:var(--text-muted);padding:8px">No options.</div>';updateDirCount()}
+    function filterDirectionOptions(){renderDirectionOptions()}
+    function toggleDirection(id){if(selectedDirections[id])delete selectedDirections[id];else selectedDirections[id]=true;updateDirCount()}
+    function updateDirCount(){document.getElementById('dirCount').textContent=Object.keys(selectedDirections).length}
+    async function generateDirection(){const selected=Object.keys(selectedDirections);const ct=document.getElementById('customDirectionText')?.value;if(activeDirCategory==='custom'&&ct)selected.push('custom_text');if(!selected.length){showToast('Select at least one option','error');return}
+    const target=document.getElementById('dirTarget').value;document.getElementById('dirBtnGenerate').disabled=true;document.getElementById('dirBtnGenerate').textContent='Generating...'
+    try{const r=await fetch(API+'/projects/'+activeProject+'/generate-direction',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({selected_options:selected,custom_text:ct,target,include_completed_tasks:document.getElementById('ctxCompleted').checked,include_file_manifest:document.getElementById('ctxManifest').checked,include_workspace_state:document.getElementById('ctxWorkspace').checked})})
+    if(r.ok){const d=await r.json();dirResult=d;document.getElementById('dirPreview').textContent=d.generated;document.getElementById('dirPreview').style.display='';document.getElementById('dirBtnGenerate').style.display='none';document.getElementById('dirBtnRegenerate').style.display='';document.getElementById('dirBtnApply').style.display='';document.getElementById('dirBtnCopy').style.display='';showToast('Generated ('+(d.tokens_used||'?')+' tokens)','success')}else{document.getElementById('dirPreview').textContent='Error';document.getElementById('dirPreview').style.display=''}}
+    catch(e){document.getElementById('dirPreview').textContent='Error: '+e.message;document.getElementById('dirPreview').style.display=''}
+    document.getElementById('dirBtnGenerate').disabled=false;document.getElementById('dirBtnGenerate').textContent='Generate Direction Prompt'}
+    function copyDirectionResult(){if(dirResult?.generated){navigator.clipboard.writeText(dirResult.generated);showToast('Copied','success')}}
+    async function applyDirectionResult(){if(!dirResult?.generated||!activeProject)return;const target=document.getElementById('dirTarget').value;if(target==='intent'){document.getElementById('iIntent').value=dirResult.generated;await saveIntent()}else if(target==='architect_prompt'){document.getElementById('iArchitect').value=dirResult.generated;await savePrompts()}else if(target==='builder_prompt'){document.getElementById('iBuilder').value=dirResult.generated;await savePrompts()};showToast('Applied','success');closeDirectionEngine()}
+    if(bridge){bridge.onConductorEvent(({event,data})=>{if(event==='state_update'&&data.projectName===activeProject){conductorState=data;updateConductorUI()}if(event==='conductor_started'){showToast('Engine launched','success');fetchConductorState()}if(event==='conductor_stopped'||event==='pipeline_failed'){showToast('Engine stopped','info');fetchConductorState()}if(event==='project_complete'){showToast('Complete!','success');fetchProjects();fetchConductorState()}if(event==='plan_ready'){renderBoard()}})}
+    connect();fetchAvailableModels();setInterval(()=>{if(activeProject&&bridge)fetchConductorState()},5000);
+    </script>
+</body>
+</html>

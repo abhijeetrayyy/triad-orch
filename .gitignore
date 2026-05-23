@@ -1,0 +1,14 @@
+node_modules/
+dist/
+*.db
+*.db-shm
+*.db-wal
+*.log
+.env
+.triad/
+.triad_tools/
+projects/*/workspace/
+projects/*/checkpoint.json
+projects/*/checkpoint_archive/
+projects/*/logs/
+output-project/
