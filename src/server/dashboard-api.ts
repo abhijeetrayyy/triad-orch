@@ -204,6 +204,7 @@ app.get('/api/models/list', async (req, res) => {
 
   result.DEEPSEEK = ['deepseek-v4-pro', 'deepseek-v4-flash'];
   result.OPENROUTER = result.OPENROUTER.concat(['deepseek/deepseek-chat:free', 'meta-llama/llama-3.3-70b-instruct:free', 'google/gemini-2.0-flash-exp:free']);
+  result.OPENCODE = result.OPENCODE.concat(['deepseek-v4-flash-free', 'deepseek-v4-pro', 'qwen3.6-plus-free']);
 
   modelsCache = result;
   modelsCacheTime = Date.now();

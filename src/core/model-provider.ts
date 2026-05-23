@@ -27,11 +27,11 @@ const PROVIDERS = {
 };
 
 export const Models = {
-  ARCHITECT_PRIMARY: { provider: 'OPENROUTER', name: 'deepseek/deepseek-chat:free' },
+  ARCHITECT_PRIMARY: { provider: 'OPENCODE', name: 'deepseek-v4-flash-free' },
   ARCHITECT_FALLBACK: { provider: 'OPENCODE', name: 'deepseek-v4-flash-free' },
   BUILDER: { provider: 'OPENCODE', name: 'deepseek-v4-flash-free' },
-  REVIEWER: { provider: 'OPENROUTER', name: 'meta-llama/llama-3.3-70b-instruct:free' },
-  AUDITOR: { provider: 'OPENROUTER', name: 'meta-llama/llama-3.3-70b-instruct:free' },
+  REVIEWER: { provider: 'OPENCODE', name: 'deepseek-v4-flash-free' },
+  AUDITOR: { provider: 'OPENCODE', name: 'deepseek-v4-flash-free' },
 };
 
 export type ModelRole = keyof typeof Models;

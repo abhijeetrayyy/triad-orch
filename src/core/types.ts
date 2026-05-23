@@ -133,44 +133,8 @@ export interface Checkpoint {
 }
 
 export const DEFAULT_MODEL_CONFIG: ProjectModelConfig = {
-  architect: {
-    cli: 'opencode',
-    provider: 'openrouter',
-    model: 'deepseek/deepseek-chat:free',
-    fallback: {
-      cli: 'opencode',
-      provider: 'opencode',
-      model: 'deepseek-v4-flash-free'
-    }
-  },
-  builder: {
-    cli: 'opencode',
-    provider: 'opencode',
-    model: 'deepseek-v4-flash-free',
-    fallback: {
-      cli: 'opencode',
-      provider: 'openrouter',
-      model: 'deepseek/deepseek-chat:free'
-    }
-  },
-  reviewer: {
-    cli: 'opencode',
-    provider: 'openrouter',
-    model: 'meta-llama/llama-3.3-70b-instruct:free',
-    fallback: {
-      cli: 'opencode',
-      provider: 'opencode',
-      model: 'deepseek-v4-flash-free'
-    }
-  },
-  auditor: {
-    cli: 'opencode',
-    provider: 'openrouter',
-    model: 'meta-llama/llama-3.3-70b-instruct:free',
-    fallback: {
-      cli: 'opencode',
-      provider: 'opencode',
-      model: 'deepseek-v4-flash-free'
-    }
-  }
+  architect: { cli: 'opencode', provider: 'opencode', model: 'deepseek-v4-flash-free' },
+  builder: { cli: 'opencode', provider: 'opencode', model: 'deepseek-v4-flash-free' },
+  reviewer: { cli: 'opencode', provider: 'opencode', model: 'deepseek-v4-flash-free' },
+  auditor: { cli: 'opencode', provider: 'opencode', model: 'deepseek-v4-flash-free' }
 };
