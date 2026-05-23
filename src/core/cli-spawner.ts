@@ -38,7 +38,11 @@ export class CLISpawner {
     };
     fs.writeFileSync(path.join(triadDir, configFile), JSON.stringify(config, null, 2));
 
-    const ptyProcess = pty.spawn('opencode', [], {
+    const opencodePath = process.env.LOCALAPPDATA
+      ? path.join(process.env.LOCALAPPDATA, 'npm', 'node_modules', 'opencode-ai', 'bin', 'opencode.exe')
+      : 'opencode';
+    const cmd = process.platform === 'win32' && fs.existsSync(opencodePath) ? opencodePath : 'opencode';
+    const ptyProcess = pty.spawn(cmd, [], {
       name: 'xterm-color',
       cols: 120,
       rows: 30,
@@ -65,7 +69,12 @@ export class CLISpawner {
   }
 
   spawnGemini(role: AgentRole, promptContent: string): pty.IPty {
-    const ptyProcess = pty.spawn('gemini', [], {
+    const geminiPath = process.env.LOCALAPPDATA
+      ? path.join(process.env.LOCALAPPDATA, 'npm', 'node_modules', '@google', 'gemini-cli', 'bundle', 'gemini.js')
+      : '';
+    const cmd = process.platform === 'win32' && fs.existsSync(geminiPath) ? process.execPath : 'gemini';
+    const args = process.platform === 'win32' && fs.existsSync(geminiPath) ? [geminiPath] : [];
+    const ptyProcess = pty.spawn(cmd, args, {
       name: 'xterm-color',
       cols: 120,
       rows: 30,
