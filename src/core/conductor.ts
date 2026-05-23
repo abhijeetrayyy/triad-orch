@@ -1,55 +1,46 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { FileBus } from './file-bus';
 import { GitManager, CommitEntry } from './git-manager';
-import { CLISpawner } from './cli-spawner';
 import { PromptBuilder } from './prompt-builder';
-import { PromptSanitizer } from './prompt-sanitizer';
 import { SharedMemory } from './memory';
-import { VisualBridge } from './visual-bridge';
 import { db } from './database';
+import { callModel } from './model-provider';
+import { ToolExecutor, ToolCall } from './tools';
 import {
   AgentRole, ConductorStatus, ProjectModelConfig,
-  DEFAULT_MODEL_CONFIG, TaskQueueEntry, Checkpoint, CheckpointTask
+  DEFAULT_MODEL_CONFIG, TaskQueueEntry, Checkpoint
 } from './types';
-
-const AGENT_TIMEOUT_MS = 8 * 60 * 1000;
 
 export class Conductor {
   private projectName: string;
   private workspacePath: string;
-  private fileBus: FileBus;
+  private triadDir: string = '';
   private git: GitManager;
-  private spawner: CLISpawner;
   private promptBuilder: PromptBuilder;
-  private sanitizer: PromptSanitizer;
   private memory: SharedMemory;
-  private visual: VisualBridge;
   private sessionId: string;
   private status: ConductorStatus;
   private taskQueue: TaskQueueEntry[];
   private currentTaskId: string | null;
   private modelConfig: ProjectModelConfig;
   private loopCount: number;
-  private timeoutTimers: Map<AgentRole, NodeJS.Timeout> = new Map();
   private broadcastFn: ((event: string, data: any) => void) | null = null;
   private checkpoint: Checkpoint | null = null;
   private checkpointPath: string = '';
   private workspaceMapCache: string[] | null = null;
   private workspaceMapCacheTime: number = 0;
   private cachedIntent: string = '';
+  private tools: ToolExecutor;
 
   constructor(projectName: string, workspacePath: string) {
     this.projectName = projectName;
     this.workspacePath = workspacePath;
-    this.fileBus = new FileBus(workspacePath);
     this.git = new GitManager(workspacePath);
-    this.spawner = new CLISpawner(workspacePath);
+    this.tools = new ToolExecutor(workspacePath);
     this.promptBuilder = new PromptBuilder();
-    this.sanitizer = new PromptSanitizer();
     this.memory = new SharedMemory();
-    this.visual = new VisualBridge(workspacePath);
+    this.triadDir = path.join(workspacePath, '.triad');
     this.sessionId = '';
     this.status = 'idle';
     this.taskQueue = [];
@@ -61,7 +52,6 @@ export class Conductor {
 
   setBroadcast(fn: (event: string, data: any) => void): void {
     this.broadcastFn = fn;
-    this.spawner.setBroadcast(fn);
   }
 
   private emit(event: string, data: any): void {
@@ -91,24 +81,27 @@ export class Conductor {
       }
     }
 
+    this.triadDir = path.join(this.workspacePath, '.triad');
+    if (!fs.existsSync(this.triadDir)) fs.mkdirSync(this.triadDir, { recursive: true });
     this.cachedIntent = intent;
-    this.fileBus.write('intent.md', this.buildIntentFile(intent));
-    this.fileBus.write('model_config.json', JSON.stringify(this.modelConfig, null, 2));
+    fs.writeFileSync(path.join(this.triadDir, 'intent.md'), this.buildIntentFile(intent));
+    fs.writeFileSync(path.join(this.triadDir, 'model_config.json'), JSON.stringify(this.modelConfig, null, 2));
 
     const memoryContext = this.memory.getRelevantLessons(intent);
-    this.fileBus.write('memory_context.md', memoryContext || 'No relevant past lessons found.');
+    fs.writeFileSync(path.join(this.triadDir, 'memory_context.md'), memoryContext || 'No relevant past lessons found.');
 
     this.initCheckpoint(intent);
-    this.registerFileHandlers();
 
     await this.saveState();
     await this.git.commit(`[${this.sessionId}] [system] session initialized`);
 
-    this.status = 'planning';
-    this.spawnArchitect(intent);
     this.emit('conductor_started', { sessionId: this.sessionId, projectName: this.projectName });
     // Periodic state broadcast for live dashboard updates
     this.stateInterval = setInterval(() => this.emit('state_update', { ...this.getState(), projectName: this.projectName }), 2000);
+
+    // Start the async pipeline (no spawning, no file watching)
+    this.status = 'planning';
+    await this.handlePlanning(intent);
   }
 
   private stateInterval: NodeJS.Timeout | null = null;
@@ -116,8 +109,6 @@ export class Conductor {
   async stop(): Promise<void> {
     console.log(`[Conductor] Stopping project "${this.projectName}"...`);
     if (this.stateInterval) { clearInterval(this.stateInterval); this.stateInterval = null; }
-    this.clearTimeouts();
-    this.spawner.killAll();
     this.status = 'failed';
     await this.saveState();
     this.emit('conductor_stopped', { projectName: this.projectName });
@@ -126,7 +117,6 @@ export class Conductor {
   async pause(): Promise<void> {
     console.log(`[Conductor] Pausing project "${this.projectName}"...`);
     this.status = 'paused';
-    this.clearTimeouts();
     await this.saveState();
     this.emit('conductor_paused', { projectName: this.projectName });
   }
@@ -147,7 +137,7 @@ export class Conductor {
       current_task_id: this.currentTaskId,
       loop_count: this.loopCount,
       task_queue: this.taskQueue,
-      active_agents: this.spawner.getActiveRoles(),
+      active_agents: [],
     };
   }
 
@@ -163,206 +153,53 @@ export class Conductor {
     return await this.git.getBranches();
   }
 
-  // ========== File handlers ==========
+  // ========== Direct API Pipeline ==========
 
-  private registerFileHandlers(): void {
-    this.fileBus.watch('plan.md', (content) => this.onPlanReady(content));
-    this.fileBus.watch('done.signal', () => this.onTaskDone());
-    this.fileBus.watch('review.md', (content) => this.onReviewReady(content));
-    this.fileBus.watch('audit.md', (content) => this.onAuditReady(content));
-    this.fileBus.watch('fail_signal', (content) => this.onFailSignal(content));
-  }
-
-  private async onPlanReady(planContent: string): Promise<void> {
-    console.log('[Conductor] Plan received from Architect.');
-    const tasks = this.parsePlan(planContent);
-
-    if (!tasks || tasks.length === 0) {
-      console.error('[Conductor] Architect plan could not be parsed.');
-      this.emit('error', { message: 'Architect plan could not be parsed. Check architect terminal.' });
-      this.fileBus.write('state.json', JSON.stringify({ error: 'plan_parse_failed' }, null, 2));
-      return;
-    }
-
-    this.taskQueue = tasks;
-    this.fileBus.write('task_queue.json', JSON.stringify(tasks, null, 2));
-
-    try {
-      await this.git.commit(`[${this.sessionId}] [architect] plan created — ${tasks.length} tasks`);
-    } catch (e: any) {
-      console.error('[Conductor] Git commit failed (non-blocking):', e.message);
-      this.emit('warning', { message: `Git commit failed: ${e.message}` });
-    }
-
-    this.emit('plan_ready', { tasks, projectName: this.projectName });
-    await this.saveState();
-    await this.startNextTask();
-  }
-
-  private async onTaskDone(): Promise<void> {
-    console.log('[Conductor] Task done signal received.');
-    this.spawner.kill('builder');
-    this.clearTimeout('builder');
-
-    const currentTask = this.taskQueue.find(t => t.id === this.currentTaskId);
-    if (currentTask) {
-      currentTask.status = 'completed';
-    }
-
-    try {
-      await this.git.commit(`[${this.sessionId}] [builder] ${this.currentTaskId || 'task'} complete`);
-    } catch (e: any) {
-      console.error('[Conductor] Git commit failed (non-blocking):', e.message);
-    }
-
-    await this.saveState();
-    this.status = 'reviewing';
-    this.spawnReviewer();
-  }
-
-  private async onReviewReady(reviewContent: string): Promise<void> {
-    console.log('[Conductor] Review received.');
-    this.spawner.kill('reviewer');
-    this.clearTimeout('reviewer');
-
-    const verdict = this.parseReviewVerdict(reviewContent);
-    const currentTask = this.taskQueue.find(t => t.id === this.currentTaskId);
-
-    if (verdict === 'PASS') {
-      console.log('[Conductor] Review PASSED.');
-      if (currentTask) {
-        currentTask.reviewer_notes = reviewContent;
-        currentTask.status = 'awaiting_audit';
-      }
-
-      try {
-        await this.git.commit(`[${this.sessionId}] [reviewer] ${this.currentTaskId || 'task'}: PASS`);
-      } catch (e: any) {
-        console.error('[Conductor] Git commit failed (non-blocking):', e.message);
-      }
-
-      await this.saveState();
-      this.status = 'auditing';
-      this.spawnAuditor(reviewContent);
-    } else {
-      console.log('[Conductor] Review FAILED.');
-      if (currentTask) {
-        currentTask.retries++;
-        currentTask.reviewer_notes = reviewContent;
-
-        if (currentTask.retries >= 3) {
-          console.error(`[Conductor] Task ${this.currentTaskId} failed after 3 retries. Escalating.`);
-          currentTask.status = 'failed';
-          try {
-            await this.git.commit(`[${this.sessionId}] [reviewer] ${this.currentTaskId}: FAIL — max retries`);
-          } catch (e: any) {}
-          await this.saveState();
-          this.emit('task_failed', { taskId: this.currentTaskId, notes: reviewContent });
-          await this.startNextTask();
-        } else {
-          try {
-            await this.git.commit(`[${this.sessionId}] [reviewer] ${this.currentTaskId}: FAIL — retry ${currentTask.retries}`);
-          } catch (e: any) {}
-          await this.saveState();
-          this.status = 'executing';
-          this.spawnBuilder(reviewContent, '');
-        }
-      }
-    }
-  }
-
-  private async onAuditReady(auditContent: string): Promise<void> {
-    console.log('[Conductor] Audit received.');
-    this.spawner.kill('auditor');
-    this.clearTimeout('auditor');
-
-    const verdict = this.parseReviewVerdict(auditContent);
-    const currentTask = this.taskQueue.find(t => t.id === this.currentTaskId);
-
-    if (verdict === 'PASS') {
-      console.log('[Conductor] Audit PASSED.');
-      if (currentTask) {
-        currentTask.status = 'completed';
-        currentTask.auditor_notes = auditContent;
-
-        const lesson = this.extractLesson(auditContent);
-        if (lesson) {
-          this.memory.addLesson(this.projectName, currentTask.description, lesson);
-          console.log(`[Conductor] Lesson saved: ${lesson.substring(0, 60)}...`);
-        }
-      }
-
-      try {
-        await this.git.commit(`[${this.sessionId}] [auditor] ${this.currentTaskId || 'task'}: PASS — completed`);
-      } catch (e: any) {
-        console.error('[Conductor] Git commit failed (non-blocking):', e.message);
-      }
-
-      await this.saveState();
-      await this.startNextTask();
-    } else {
-      console.log('[Conductor] Audit FAILED.');
-      if (currentTask) {
-        currentTask.retries++;
-        currentTask.auditor_notes = auditContent;
-
-        if (currentTask.retries >= 3) {
-          console.error(`[Conductor] Task ${this.currentTaskId} failed audit after 3 retries. Escalating.`);
-          currentTask.status = 'failed';
-          try {
-            await this.git.commit(`[${this.sessionId}] [auditor] ${this.currentTaskId}: FAIL — max retries`);
-          } catch (e: any) {}
-          await this.saveState();
-          this.emit('task_failed', { taskId: this.currentTaskId, notes: auditContent });
-          await this.startNextTask();
-        } else {
-          try {
-            await this.git.commit(`[${this.sessionId}] [auditor] ${this.currentTaskId}: FAIL — retry ${currentTask.retries}`);
-          } catch (e: any) {}
-          await this.saveState();
-          this.status = 'executing';
-          this.spawnBuilder('', auditContent);
-        }
-      }
-    }
-  }
-
-  private async onFailSignal(content: string): Promise<void> {
-    console.error(`[Conductor] Fail signal received: ${content}`);
-    this.spawner.killAll();
-    this.clearTimeouts();
-    this.status = 'failed';
-
-    try {
-      await this.git.commit(`[${this.sessionId}] [system] pipeline failed`);
-    } catch (e: any) {
-      console.error('[Conductor] Git commit failed (non-blocking):', e.message);
-    }
-
-    await this.saveState();
-    this.emit('pipeline_failed', { projectName: this.projectName, reason: content });
-  }
-
-  // ========== Agent spawning ==========
-
-  private spawnArchitect(intent: string): void {
-    const workspaceMap = this.getWorkspaceMap();
-    const memoryContext = this.fileBus.read('memory_context.md');
-    const prompt = this.promptBuilder.buildArchitectPrompt(intent, memoryContext, workspaceMap);
-    const sanitized = this.sanitizer.sanitizeTaskDescription(prompt);
-
-    console.log('[Conductor] Spawning Architect...');
-    this.spawner.spawnByCLI('opencode', 'architect', sanitized, this.modelConfig.architect);
-    this.setTimeout('architect', AGENT_TIMEOUT_MS);
+  private async handlePlanning(intent: string): Promise<void> {
+    console.log('[Conductor] Planning with Architect...');
     this.emit('agent_spawned', { role: 'architect' });
+
+    const workspaceMap = this.getWorkspaceMap();
+    const memoryContext = this.memory.getRelevantLessons(intent);
+    const prompt = this.promptBuilder.buildArchitectPrompt(intent, memoryContext, workspaceMap);
+
+    const cfg = this.modelConfig.architect;
+    const provider = (cfg.provider === 'opencode' ? 'OPENCODE' : cfg.provider === 'openrouter' ? 'OPENROUTER' : 'DEEPSEEK') as any;
+    const sysPrompt = 'You are a senior architect. Decompose user intent into a precise task plan. Return a JSON array of task objects with "id", "description", "dependencies", "files_impacted". No explanation.';
+
+    try {
+      const response = await callModel(provider, cfg.model, prompt, sysPrompt);
+      const tasks = this.parsePlan(response);
+      if (!tasks || tasks.length === 0) {
+        throw new Error('Plan could not be parsed from model response');
+      }
+      this.taskQueue = tasks;
+      fs.writeFileSync(path.join(this.triadDir, 'task_queue.json'), JSON.stringify(tasks, null, 2));
+
+      try { await this.git.commit(`[${this.sessionId}] [architect] plan created — ${tasks.length} tasks`); } catch (e) {}
+      this.emit('plan_ready', { tasks, projectName: this.projectName });
+      await this.saveState();
+      console.log(`[Conductor] Plan created: ${tasks.length} tasks.`);
+      await this.startNextTask();
+    } catch (e: any) {
+      console.error('[Conductor] Planning failed:', e.message);
+      this.emit('error', { message: `Planning failed: ${e.message}` });
+      fs.writeFileSync(path.join(this.triadDir, 'state.json'), JSON.stringify({ error: 'planning_failed', message: e.message }));
+      this.status = 'failed';
+      await this.saveState();
+    }
   }
 
-  private spawnBuilder(reviewerNotes: string, auditorNotes: string): void {
+  private async handleExecution(): Promise<void> {
     const currentTask = this.taskQueue.find(t => t.id === this.currentTaskId);
     if (!currentTask) {
-      console.error('[Conductor] No current task to build.');
+      console.error('[Conductor] No current task for execution.');
+      await this.startNextTask();
       return;
     }
+
+    console.log(`[Conductor] Building task ${currentTask.id}: ${currentTask.description.substring(0, 60)}...`);
+    this.emit('agent_spawned', { role: 'builder', taskId: currentTask.id });
 
     const workspaceMap = this.getWorkspaceMap();
     const prompt = this.promptBuilder.buildBuilderPrompt({
@@ -374,60 +211,146 @@ export class Conductor {
       dependencies: currentTask.dependencies,
       auditor_notes: currentTask.auditor_notes,
       reviewer_notes: currentTask.reviewer_notes
-    }, workspaceMap, reviewerNotes, auditorNotes);
-    const sanitized = this.sanitizer.sanitizeTaskDescription(prompt);
+    }, workspaceMap, currentTask.reviewer_notes || '', currentTask.auditor_notes || '');
 
-    this.fileBus.write('task_current.md', this.buildTaskCurrentFile(currentTask, reviewerNotes, auditorNotes));
+    const cfg = this.modelConfig.builder;
+    const provider = (cfg.provider === 'opencode' ? 'OPENCODE' : cfg.provider === 'openrouter' ? 'OPENROUTER' : 'DEEPSEEK') as any;
+    const sysPrompt = `You are a builder. Execute the given task by using tools.
+Available tools: write_file, read_file, run_command
+Respond ONLY with a JSON object: {"action": "write_file|run_command|read_file", "path": "...", "content": "...", "command": "..."}
+When the task is complete, respond with: {"action": "done", "summary": "what was done"}`;
 
-    console.log(`[Conductor] Spawning Builder for task ${currentTask.id}...`);
-    this.spawner.spawnByCLI('opencode', 'builder', sanitized, this.modelConfig.builder);
-    this.setTimeout('builder', AGENT_TIMEOUT_MS);
-    this.emit('agent_spawned', { role: 'builder', taskId: currentTask.id });
+    try {
+      let taskDone = false;
+      let retries = 0;
+      while (!taskDone && retries < 10) {
+        retries++;
+        const response = await callModel(provider, cfg.model, prompt, sysPrompt);
+        const toolCall = this.extractToolCall(response);
+
+        if (!toolCall) {
+          console.warn(`[Conductor] Builder returned unparseable response, retry ${retries}`);
+          continue;
+        }
+
+        if (toolCall.action === 'done') {
+          taskDone = true;
+          currentTask.status = 'awaiting_review';
+          if (toolCall.path) {
+            if (!currentTask.files_impacted) currentTask.files_impacted = [];
+            if (!currentTask.files_impacted.includes(toolCall.path)) currentTask.files_impacted.push(toolCall.path);
+          }
+          console.log(`[Conductor] Task ${currentTask.id} done: ${toolCall.summary || 'completed'}`);
+          break;
+        }
+
+        try {
+          const result = await this.tools.execute(toolCall as ToolCall);
+          const lines = result.split('\n').filter(l => l.trim());
+          lines.forEach(l => this.emit('log', { role: 'builder', message: l.substring(0, 200) }));
+        } catch (e: any) {
+          console.error(`[Conductor] Tool execution error: ${e.message}`);
+        }
+      }
+
+      if (!taskDone) {
+        currentTask.status = 'failed';
+        currentTask.retries++;
+        console.error(`[Conductor] Task ${currentTask.id} failed after max retries.`);
+      }
+
+      try { await this.git.commit(`[${this.sessionId}] [builder] ${currentTask.id}: ${taskDone ? 'complete' : 'failed'}`); } catch (e) {}
+      await this.saveState();
+
+      if (taskDone) {
+        this.status = 'reviewing';
+        await this.handleReview();
+      } else {
+        await this.startNextTask();
+      }
+    } catch (e: any) {
+      console.error(`[Conductor] Builder API error: ${e.message}`);
+      currentTask.status = 'failed';
+      currentTask.retries++;
+      await this.saveState();
+      await this.startNextTask();
+    }
   }
 
-  private spawnReviewer(): void {
+  private async handleReview(): Promise<void> {
     const currentTask = this.taskQueue.find(t => t.id === this.currentTaskId);
     if (!currentTask) {
-      console.error('[Conductor] No current task to review.');
+      console.error('[Conductor] No current task for review.');
+      await this.startNextTask();
       return;
     }
 
+    console.log(`[Conductor] Reviewing task ${currentTask.id}...`);
+    this.emit('agent_spawned', { role: 'reviewer', taskId: currentTask.id });
+
     const changedFiles = currentTask.files_impacted || [];
-    const intent = this.fileBus.exists('intent.md') ? this.fileBus.read('intent.md') : '';
     const prompt = this.promptBuilder.buildReviewerPrompt({
       id: currentTask.id,
       description: currentTask.description,
       status: 'awaiting_review',
       retry_count: currentTask.retries,
-      files_impacted: currentTask.files_impacted || [],
+      files_impacted: changedFiles,
       dependencies: currentTask.dependencies,
       auditor_notes: currentTask.auditor_notes,
       reviewer_notes: currentTask.reviewer_notes
-    }, changedFiles, intent);
-    const sanitized = this.sanitizer.sanitizeTaskDescription(prompt);
+    }, changedFiles, this.cachedIntent);
 
-    console.log(`[Conductor] Spawning Reviewer for task ${currentTask.id}...`);
-    this.spawner.spawnByCLI('opencode', 'reviewer', sanitized, this.modelConfig.reviewer);
-    this.setTimeout('reviewer', AGENT_TIMEOUT_MS);
-    this.emit('agent_spawned', { role: 'reviewer', taskId: currentTask.id });
+    const cfg = this.modelConfig.reviewer;
+    const provider = (cfg.provider === 'opencode' ? 'OPENCODE' : cfg.provider === 'openrouter' ? 'OPENROUTER' : 'DEEPSEEK') as any;
+    const sysPrompt = 'Review the code changes for bugs, security issues, and regressions. First line must be either PASS or FAIL.';
+
+    try {
+      const response = await callModel(provider, cfg.model, prompt, sysPrompt);
+      const verdict = this.parseReviewVerdict(response);
+      currentTask.reviewer_notes = response;
+
+      if (verdict === 'PASS') {
+        console.log('[Conductor] Review PASSED.');
+        currentTask.status = 'awaiting_audit';
+        this.status = 'auditing';
+        try { await this.git.commit(`[${this.sessionId}] [reviewer] ${currentTask.id}: PASS`); } catch (e) {}
+        await this.saveState();
+        await this.handleAudit();
+      } else {
+        currentTask.retries++;
+        if (currentTask.retries >= 3) {
+          currentTask.status = 'failed';
+          console.error(`[Conductor] Task ${currentTask.id} failed review after 3 retries.`);
+          try { await this.git.commit(`[${this.sessionId}] [reviewer] ${currentTask.id}: FAIL — max retries`); } catch (e) {}
+          await this.saveState();
+          await this.startNextTask();
+        } else {
+          console.log(`[Conductor] Review FAILED, retry ${currentTask.retries}/3.`);
+          try { await this.git.commit(`[${this.sessionId}] [reviewer] ${currentTask.id}: FAIL — retry ${currentTask.retries}`); } catch (e) {}
+          this.status = 'executing';
+          await this.saveState();
+          await this.handleExecution();
+        }
+      }
+    } catch (e: any) {
+      console.error(`[Conductor] Review API error: ${e.message}`);
+      currentTask.status = 'awaiting_audit';
+      this.status = 'auditing';
+      await this.saveState();
+      await this.handleAudit();
+    }
   }
 
-  private spawnAuditor(reviewNotes: string): void {
+  private async handleAudit(): Promise<void> {
     const currentTask = this.taskQueue.find(t => t.id === this.currentTaskId);
     if (!currentTask) {
-      console.error('[Conductor] No current task to audit.');
+      console.error('[Conductor] No current task for audit.');
+      await this.startNextTask();
       return;
     }
 
-    let screenshotPath: string | undefined;
-    const htmlFiles = (currentTask.files_impacted || []).filter(f => f.endsWith('.html'));
-    if (htmlFiles.length > 0) {
-      const screenshotsDir = path.join(this.workspacePath, '.triad', 'screenshots');
-      if (!fs.existsSync(screenshotsDir)) {
-        fs.mkdirSync(screenshotsDir, { recursive: true });
-      }
-      screenshotPath = screenshotsDir;
-    }
+    console.log(`[Conductor] Auditing task ${currentTask.id}...`);
+    this.emit('agent_spawned', { role: 'auditor', taskId: currentTask.id });
 
     const prompt = this.promptBuilder.buildAuditorPrompt({
       id: currentTask.id,
@@ -438,13 +361,63 @@ export class Conductor {
       dependencies: currentTask.dependencies,
       auditor_notes: currentTask.auditor_notes,
       reviewer_notes: currentTask.reviewer_notes
-    }, reviewNotes, screenshotPath);
-    const sanitized = this.sanitizer.sanitizeTaskDescription(prompt);
+    }, currentTask.reviewer_notes || '');
 
-    console.log(`[Conductor] Spawning Auditor for task ${currentTask.id}...`);
-    this.spawner.spawnByCLI(this.modelConfig.auditor.cli, 'auditor', sanitized, this.modelConfig.auditor);
-    this.setTimeout('auditor', AGENT_TIMEOUT_MS);
-    this.emit('agent_spawned', { role: 'auditor', taskId: currentTask.id });
+    const cfg = this.modelConfig.auditor;
+    const provider = (cfg.provider === 'opencode' ? 'OPENCODE' : cfg.provider === 'openrouter' ? 'OPENROUTER' : 'DEEPSEEK') as any;
+    const sysPrompt = 'Verify the task is fully and correctly completed. First line must be either PASS or FAIL. Include a Lesson section if passing.';
+
+    try {
+      const response = await callModel(provider, cfg.model, prompt, sysPrompt);
+      const verdict = this.parseReviewVerdict(response);
+      currentTask.auditor_notes = response;
+
+      if (verdict === 'PASS') {
+        currentTask.status = 'completed';
+        console.log(`[Conductor] Audit PASSED for task ${currentTask.id}.`);
+        const lesson = this.extractLesson(response);
+        if (lesson) this.memory.addLesson(this.projectName, currentTask.description, lesson);
+        try { await this.git.commit(`[${this.sessionId}] [auditor] ${currentTask.id}: PASS`); } catch (e) {}
+        await this.saveState();
+        this.loopCount++;
+        await this.startNextTask();
+      } else {
+        currentTask.retries++;
+        if (currentTask.retries >= 3) {
+          currentTask.status = 'failed';
+          console.error(`[Conductor] Task ${currentTask.id} failed audit after 3 retries.`);
+          try { await this.git.commit(`[${this.sessionId}] [auditor] ${currentTask.id}: FAIL — max retries`); } catch (e) {}
+          await this.saveState();
+          await this.startNextTask();
+        } else {
+          console.log(`[Conductor] Audit FAILED, retry ${currentTask.retries}/3.`);
+          try { await this.git.commit(`[${this.sessionId}] [auditor] ${currentTask.id}: FAIL — retry ${currentTask.retries}`); } catch (e) {}
+          this.status = 'executing';
+          await this.saveState();
+          await this.handleExecution();
+        }
+      }
+    } catch (e: any) {
+      console.error(`[Conductor] Audit API error: ${e.message}`);
+      currentTask.retries++;
+      if (currentTask.retries >= 3) {
+        currentTask.status = 'failed';
+      }
+      await this.saveState();
+      if (currentTask.status !== 'failed') {
+        this.status = 'executing';
+        await this.handleExecution();
+      } else {
+        await this.startNextTask();
+      }
+    }
+  }
+
+  private extractToolCall(response: string): any {
+    try { const r = JSON.parse(response.trim()); if (r.action) return r; } catch (e) {}
+    const m = response.match(/\{[^{}]*"action"[^{}]*\}/);
+    if (m) { try { return JSON.parse(m[0]); } catch (e) {} }
+    return null;
   }
 
   // ========== Task queue management ==========
@@ -469,21 +442,17 @@ export class Conductor {
     this.currentTaskId = nextTask.id;
     this.status = 'executing';
     await this.saveState();
-    this.spawnBuilder('', '');
+    await this.handleExecution();
   }
 
   private async completeProject(): Promise<void> {
     console.log('[Conductor] All tasks complete!');
     this.status = 'completed';
-    this.spawner.killAll();
-    this.clearTimeouts();
-
     try {
       await this.git.commit(`[${this.sessionId}] [project] COMPLETE — ${this.taskQueue.length} tasks, ${this.loopCount} loops`);
     } catch (e: any) {
       console.error('[Conductor] Git commit failed (non-blocking):', e.message);
     }
-
     await this.saveState();
     this.emit('project_complete', {
       projectName: this.projectName,
@@ -496,12 +465,11 @@ export class Conductor {
     const pending = this.taskQueue.find(t =>
       t.status === 'pending' || t.status === 'failed'
     );
-
     if (pending) {
       this.currentTaskId = pending.id;
       this.status = 'executing';
       await this.saveState();
-      this.spawnBuilder('', '');
+      await this.handleExecution();
     } else if (this.taskQueue.some(t => t.status === 'completed' || t.status === 'awaiting_audit')) {
       this.status = 'idle';
       await this.saveState();
@@ -741,85 +709,20 @@ export class Conductor {
       current_task_id: this.currentTaskId,
       loop_count: this.loopCount,
       task_queue: this.taskQueue,
-      active_agents: this.spawner.getActiveRoles(),
+      active_agents: [],
       last_commit: '',
       started_at: new Date().toISOString(),
     };
 
-    this.fileBus.write('state.json', JSON.stringify(state, null, 2));
+    fs.writeFileSync(path.join(this.triadDir, 'state.json'), JSON.stringify(state, null, 2));
     this.emit('state_update', state);
     this.saveCheckpoint();
 
     db.upsertProject(this.projectName,
-      this.cachedIntent || (this.fileBus.exists('intent.md') ? this.fileBus.read('intent.md') : ''),
+      this.cachedIntent || (fs.existsSync(path.join(this.triadDir, 'intent.md')) ? fs.readFileSync(path.join(this.triadDir, 'intent.md'), 'utf-8') : ''),
       this.status, 50, this.loopCount,
       JSON.stringify(this.modelConfig)
     );
-  }
-
-  // ========== Timeout management ==========
-
-  private setTimeout(role: AgentRole, ms: number): void {
-    this.clearTimeout(role);
-    const timer = setTimeout(() => this.handleTimeout(role), ms);
-    this.timeoutTimers.set(role, timer);
-  }
-
-  private clearTimeout(role: AgentRole): void {
-    const timer = this.timeoutTimers.get(role);
-    if (timer) {
-      clearTimeout(timer);
-      this.timeoutTimers.delete(role);
-    }
-  }
-
-  private clearTimeouts(): void {
-    this.timeoutTimers.forEach((timer) => clearTimeout(timer));
-    this.timeoutTimers.clear();
-  }
-
-  private async handleTimeout(role: AgentRole): Promise<void> {
-    console.error(`[Conductor] Agent ${role} timed out.`);
-    this.spawner.kill(role);
-    this.clearTimeout(role);
-
-    const currentTask = this.taskQueue.find(t => t.id === this.currentTaskId);
-    if (currentTask) {
-      currentTask.retries++;
-      if (currentTask.retries >= 3) {
-        currentTask.status = 'failed';
-        console.error(`[Conductor] Task ${this.currentTaskId} failed after 3 timeouts.`);
-        try {
-          await this.git.commit(`[${this.sessionId}] [${role}] ${this.currentTaskId}: TIMEOUT — max retries`);
-        } catch (e: any) {}
-        await this.saveState();
-        this.emit('task_failed', { taskId: this.currentTaskId, reason: 'timeout' });
-        await this.startNextTask();
-        return;
-      }
-      currentTask.status = 'pending';
-      try {
-        await this.git.commit(`[${this.sessionId}] [${role}] ${this.currentTaskId || 'task'}: TIMEOUT — retry ${currentTask.retries}`);
-      } catch (e: any) {}
-      await this.saveState();
-      this.emit('agent_timeout', { role, taskId: this.currentTaskId, retry: currentTask.retries });
-      // Re-spawn the agent
-      this.respawnAgent(role);
-    }
-  }
-
-  private respawnAgent(role: AgentRole): void {
-    if (role === 'architect') {
-      const intent = this.fileBus.exists('intent.md') ? this.fileBus.read('intent.md') : '';
-      this.spawnArchitect(intent);
-    } else if (role === 'builder') {
-      this.spawnBuilder('', '');
-    } else if (role === 'reviewer') {
-      this.spawnReviewer();
-    } else if (role === 'auditor') {
-      const currentTask = this.taskQueue.find(t => t.id === this.currentTaskId);
-      this.spawnAuditor(currentTask?.reviewer_notes || '');
-    }
   }
 
   getSessionId(): string {
