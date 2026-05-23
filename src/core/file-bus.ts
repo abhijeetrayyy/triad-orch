@@ -49,7 +49,11 @@ export class FileBus {
   }
 
   read(filename: string): string {
-    return fs.readFileSync(path.join(this.triadDir, filename), 'utf-8');
+    try {
+      return fs.readFileSync(path.join(this.triadDir, filename), 'utf-8');
+    } catch (e) {
+      return '';
+    }
   }
 
   delete(filename: string): void {

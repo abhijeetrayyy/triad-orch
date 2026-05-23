@@ -10,16 +10,26 @@ interface PTYOutput {
   data: string;
 }
 
+const OUTPUT_FILES: Record<AgentRole, string> = {
+  architect: 'plan.md',
+  builder: 'done.signal',
+  reviewer: 'review.md',
+  auditor: 'audit.md'
+};
+
 export class CLISpawner {
   private workspacePath: string;
+  private triadDir: string;
   private ptys: Map<AgentRole, pty.IPty> = new Map();
   private outputs: Map<AgentRole, string> = new Map();
+  private agentRoles: Map<string, AgentRole> = new Map();
   private broadcast: BroadcastFn | null = null;
   private lastActivity: Map<AgentRole, number> = new Map();
   private watchdogInterval: NodeJS.Timeout | null = null;
 
   constructor(workspacePath: string) {
     this.workspacePath = workspacePath;
+    this.triadDir = path.join(workspacePath, '.triad');
     // Workaround for node-pty ConPTY console attach failure in headless Electron
     if (process.platform === 'win32' && !process.env.CONPTY_USE_WINPTY) {
       process.env.CONPTY_USE_WINPTY = '1';
@@ -49,18 +59,11 @@ export class CLISpawner {
   }
 
   spawnOpenCode(role: AgentRole, promptContent: string, modelConfig: ModelConfig): pty.IPty {
-    const triadDir = path.join(this.workspacePath, '.triad');
-    if (!fs.existsSync(triadDir)) {
-      fs.mkdirSync(triadDir, { recursive: true });
+    if (!fs.existsSync(this.triadDir)) {
+      fs.mkdirSync(this.triadDir, { recursive: true });
     }
 
-    const configFile = `opencode_${role}_config.json`;
-    const config = {
-      provider: modelConfig.provider || 'deepseek',
-      model: modelConfig.model,
-      instructions: `You are the ${role} agent for Triad Engine. Always write your final output to .triad/${this.getExpectedOutput(role)}. Do not modify any file outside your assigned scope. Do not include markdown fences in file outputs.`
-    };
-    fs.writeFileSync(path.join(triadDir, configFile), JSON.stringify(config, null, 2));
+    this.agentRoles.set(promptContent.substring(0, 64), role);
 
     const npmDir = process.env.APPDATA
       ? path.join(process.env.APPDATA, 'npm')
@@ -96,10 +99,25 @@ export class CLISpawner {
 
     ptyProcess.onExit(({ exitCode, signal }) => {
       console.log(`[CLISpawner] ${role} exited (code=${exitCode} signal=${signal})`);
-      if (exitCode !== 0) {
-        console.error(`[CLISpawner] ${role} failed with exit code ${exitCode}`);
-      }
       this.lastActivity.set(role, 0);
+      // Write captured output to expected .triad/ file so FileBus detects it
+      const outputFile = OUTPUT_FILES[role];
+      const capturedOutput = this.outputs.get(role) || '';
+      if (outputFile && capturedOutput.trim()) {
+        try {
+          const outPath = path.join(this.triadDir, outputFile);
+          fs.writeFileSync(outPath, capturedOutput.trim(), 'utf-8');
+          console.log(`[CLISpawner] Wrote ${outputFile} from ${role} output (${capturedOutput.length} chars)`);
+        } catch (e: any) {
+          console.error(`[CLISpawner] Failed to write ${outputFile}: ${e.message}`);
+        }
+      } else if (outputFile === 'done.signal' && exitCode === 0) {
+        // Builder: write empty done.signal on success even if no output
+        try {
+          fs.writeFileSync(path.join(this.triadDir, 'done.signal'), '');
+          console.log(`[CLISpawner] Wrote empty done.signal from ${role}`);
+        } catch (e: any) {}
+      }
     });
 
     this.ptys.set(role, ptyProcess);
@@ -142,10 +160,22 @@ export class CLISpawner {
 
     ptyProcess.onExit(({ exitCode, signal }) => {
       console.log(`[CLISpawner] ${role} exited (code=${exitCode} signal=${signal})`);
-      if (exitCode !== 0) {
-        console.error(`[CLISpawner] ${role} failed with exit code ${exitCode}`);
-      }
       this.lastActivity.set(role, 0);
+      const outputFile = OUTPUT_FILES[role];
+      const capturedOutput = this.outputs.get(role) || '';
+      if (outputFile && capturedOutput.trim()) {
+        try {
+          fs.writeFileSync(path.join(this.triadDir, outputFile), capturedOutput.trim(), 'utf-8');
+          console.log(`[CLISpawner] Wrote ${outputFile} from ${role} output (${capturedOutput.length} chars)`);
+        } catch (e: any) {
+          console.error(`[CLISpawner] Failed to write ${outputFile}: ${e.message}`);
+        }
+      } else if (outputFile === 'done.signal' && exitCode === 0) {
+        try {
+          fs.writeFileSync(path.join(this.triadDir, 'done.signal'), '');
+          console.log(`[CLISpawner] Wrote empty done.signal from ${role}`);
+        } catch (e: any) {}
+      }
     });
 
     this.ptys.set(role, ptyProcess);

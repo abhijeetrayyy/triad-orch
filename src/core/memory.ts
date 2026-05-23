@@ -10,6 +10,7 @@ export interface MemoryEntry {
 
 export class SharedMemory {
   private memoryPath: string;
+  private cache: MemoryEntry[] | null = null;
 
   constructor() {
     this.memoryPath = path.join(process.cwd(), 'global_memory.json');
@@ -18,23 +19,39 @@ export class SharedMemory {
     }
   }
 
+  private load(): MemoryEntry[] {
+    if (this.cache) return this.cache;
+    try {
+      this.cache = JSON.parse(fs.readFileSync(this.memoryPath, 'utf-8'));
+    } catch (e) {
+      this.cache = [];
+    }
+    return this.cache!;
+  }
+
+  private persist(): void {
+    try {
+      fs.writeFileSync(this.memoryPath, JSON.stringify(this.cache || [], null, 2));
+    } catch (e) {}
+  }
+
   addLesson(project: string, task: string, lesson: string) {
-    const memory: MemoryEntry[] = JSON.parse(fs.readFileSync(this.memoryPath, 'utf-8'));
+    const memory = this.load();
     memory.push({
       project,
       task,
       lesson,
       timestamp: new Date().toISOString()
     });
-    fs.writeFileSync(this.memoryPath, JSON.stringify(memory, null, 2));
+    this.persist();
   }
 
   getRelevantLessons(query: string): string {
-    const memory: MemoryEntry[] = JSON.parse(fs.readFileSync(this.memoryPath, 'utf-8'));
+    const memory = this.load();
     const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 3);
     if (queryWords.length === 0) return '';
     const relevant = memory.filter(m => {
-      const taskLower = m.task.toLowerCase();
+      const taskLower = (m.task || '').toLowerCase();
       return queryWords.some(word => taskLower.includes(word));
     });
     return relevant.map(m => `[Lesson from ${m.project}]: ${m.lesson}`).join('\n');

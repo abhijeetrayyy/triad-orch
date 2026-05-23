@@ -38,6 +38,7 @@ export class Conductor {
   private checkpointPath: string = '';
   private workspaceMapCache: string[] | null = null;
   private workspaceMapCacheTime: number = 0;
+  private cachedIntent: string = '';
 
   constructor(projectName: string, workspacePath: string) {
     this.projectName = projectName;
@@ -90,6 +91,7 @@ export class Conductor {
       }
     }
 
+    this.cachedIntent = intent;
     this.fileBus.write('intent.md', this.buildIntentFile(intent));
     this.fileBus.write('model_config.json', JSON.stringify(this.modelConfig, null, 2));
 
@@ -189,6 +191,7 @@ export class Conductor {
       await this.git.commit(`[${this.sessionId}] [architect] plan created — ${tasks.length} tasks`);
     } catch (e: any) {
       console.error('[Conductor] Git commit failed (non-blocking):', e.message);
+      this.emit('warning', { message: `Git commit failed: ${e.message}` });
     }
 
     this.emit('plan_ready', { tasks, projectName: this.projectName });
@@ -361,16 +364,17 @@ export class Conductor {
       return;
     }
 
-    const task: any = {
+    const workspaceMap = this.getWorkspaceMap();
+    const prompt = this.promptBuilder.buildBuilderPrompt({
       id: currentTask.id,
       description: currentTask.description,
       status: 'in_progress',
       retry_count: currentTask.retries,
       files_impacted: currentTask.files_impacted || [],
-    };
-
-    const workspaceMap = this.getWorkspaceMap();
-    const prompt = this.promptBuilder.buildBuilderPrompt(task, workspaceMap, reviewerNotes, auditorNotes);
+      dependencies: currentTask.dependencies,
+      auditor_notes: currentTask.auditor_notes,
+      reviewer_notes: currentTask.reviewer_notes
+    }, workspaceMap, reviewerNotes, auditorNotes);
     const sanitized = this.sanitizer.sanitizeTaskDescription(prompt);
 
     this.fileBus.write('task_current.md', this.buildTaskCurrentFile(currentTask, reviewerNotes, auditorNotes));
@@ -388,17 +392,18 @@ export class Conductor {
       return;
     }
 
-    const task: any = {
+    const changedFiles = currentTask.files_impacted || [];
+    const intent = this.fileBus.exists('intent.md') ? this.fileBus.read('intent.md') : '';
+    const prompt = this.promptBuilder.buildReviewerPrompt({
       id: currentTask.id,
       description: currentTask.description,
       status: 'awaiting_review',
       retry_count: currentTask.retries,
       files_impacted: currentTask.files_impacted || [],
-    };
-
-    const changedFiles = currentTask.files_impacted || [];
-    const intent = this.fileBus.exists('intent.md') ? this.fileBus.read('intent.md') : '';
-    const prompt = this.promptBuilder.buildReviewerPrompt(task, changedFiles, intent);
+      dependencies: currentTask.dependencies,
+      auditor_notes: currentTask.auditor_notes,
+      reviewer_notes: currentTask.reviewer_notes
+    }, changedFiles, intent);
     const sanitized = this.sanitizer.sanitizeTaskDescription(prompt);
 
     console.log(`[Conductor] Spawning Reviewer for task ${currentTask.id}...`);
@@ -414,14 +419,6 @@ export class Conductor {
       return;
     }
 
-    const task: any = {
-      id: currentTask.id,
-      description: currentTask.description,
-      status: 'awaiting_audit',
-      retry_count: currentTask.retries,
-      files_impacted: currentTask.files_impacted || [],
-    };
-
     let screenshotPath: string | undefined;
     const htmlFiles = (currentTask.files_impacted || []).filter(f => f.endsWith('.html'));
     if (htmlFiles.length > 0) {
@@ -432,7 +429,16 @@ export class Conductor {
       screenshotPath = screenshotsDir;
     }
 
-    const prompt = this.promptBuilder.buildAuditorPrompt(task, reviewNotes, screenshotPath);
+    const prompt = this.promptBuilder.buildAuditorPrompt({
+      id: currentTask.id,
+      description: currentTask.description,
+      status: 'awaiting_audit',
+      retry_count: currentTask.retries,
+      files_impacted: currentTask.files_impacted || [],
+      dependencies: currentTask.dependencies,
+      auditor_notes: currentTask.auditor_notes,
+      reviewer_notes: currentTask.reviewer_notes
+    }, reviewNotes, screenshotPath);
     const sanitized = this.sanitizer.sanitizeTaskDescription(prompt);
 
     console.log(`[Conductor] Spawning Auditor for task ${currentTask.id}...`);
@@ -706,10 +712,10 @@ export class Conductor {
     this.checkpoint.status = this.status;
     this.checkpoint.current_task_id = this.currentTaskId || '';
     this.checkpoint.model_config_snapshot = {
-      architect: this.modelConfig.architect,
-      builder: this.modelConfig.builder,
-      reviewer: this.modelConfig.reviewer,
-      auditor: this.modelConfig.auditor
+      architect: { provider: this.modelConfig.architect.provider || '', name: this.modelConfig.architect.model },
+      builder: { provider: this.modelConfig.builder.provider || '', name: this.modelConfig.builder.model },
+      reviewer: { provider: this.modelConfig.reviewer.provider || '', name: this.modelConfig.reviewer.model },
+      auditor: { provider: this.modelConfig.auditor.provider || '', name: this.modelConfig.auditor.model }
     };
     // Sync tasks from taskQueue
     this.checkpoint.tasks = this.taskQueue.map(t => ({
@@ -745,7 +751,7 @@ export class Conductor {
     this.saveCheckpoint();
 
     db.upsertProject(this.projectName,
-      this.fileBus.exists('intent.md') ? this.fileBus.read('intent.md') : '',
+      this.cachedIntent || (this.fileBus.exists('intent.md') ? this.fileBus.read('intent.md') : ''),
       this.status, 50, this.loopCount,
       JSON.stringify(this.modelConfig)
     );
