@@ -35,7 +35,7 @@ app.post('/api/internal/broadcast', (req, res) => {
 
 // API: List Projects (From SQL)
 app.get('/api/projects', (req, res) => {
-  const projects = db.listProjects().map((p: any) => p.name);
+  const projects = db.listProjects();
   res.json(projects);
 });
 
@@ -177,6 +177,25 @@ app.get('/api/models/status', async (req, res) => {
   res.json({ models: Models, status });
 });
 
+// API: Sessions
+app.get('/api/projects/:name/sessions', (req, res) => {
+  try {
+    const sessions = db.getSessions(req.params.name);
+    res.json(sessions);
+  } catch (e: any) {
+    res.status(500).send(e.message);
+  }
+});
+
+app.get('/api/sessions/:id/agent-runs', (req, res) => {
+  try {
+    const runs = db.getAgentRuns(req.params.id);
+    res.json(runs);
+  } catch (e: any) {
+    res.status(500).send(e.message);
+  }
+});
+
 // API: Available Models List
 let modelsCache: Record<string, string[]> = {};
 let modelsCacheTime = 0;
@@ -202,7 +221,7 @@ app.get('/api/models/list', async (req, res) => {
     result.OPENCODE = ocResp.data.data.map((m: any) => m.id);
   } catch (e) { result.OPENCODE = []; }
 
-  result.DEEPSEEK = ['deepseek-v4-pro', 'deepseek-v4-flash'];
+  result.DEEPSEEK = ['deepseek-v4-flash-free', 'deepseek-v4-pro', 'deepseek-v4-flash'];
   result.OPENROUTER = result.OPENROUTER.concat(['deepseek/deepseek-chat:free', 'meta-llama/llama-3.3-70b-instruct:free', 'google/gemini-2.0-flash-exp:free']);
   result.OPENCODE = result.OPENCODE.concat(['deepseek-v4-flash-free', 'deepseek-v4-pro', 'qwen3.6-plus-free']);
 

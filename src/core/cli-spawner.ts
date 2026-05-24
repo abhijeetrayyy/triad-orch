@@ -5,46 +5,53 @@ import { AgentRole, CLIType, ModelConfig } from './types';
 
 type BroadcastFn = (event: string, data: any) => void;
 
-interface PTYOutput {
-  role: AgentRole;
-  data: string;
-}
-
 const OUTPUT_FILES: Record<AgentRole, string> = {
   architect: 'plan.md',
   builder: 'done.signal',
   reviewer: 'review.md',
+  ui_tester: 'ui_test_report.md',
   auditor: 'audit.md'
 };
+
+export interface CLISpawnResult {
+  success: boolean;
+  output: string;
+  exitCode: number | null;
+  signalUsed: string | null;
+  durationMs: number;
+  error?: string;
+}
 
 export class CLISpawner {
   private workspacePath: string;
   private triadDir: string;
-  private ptys: Map<AgentRole, pty.IPty> = new Map();
-  private outputs: Map<AgentRole, string> = new Map();
-  private agentRoles: Map<string, AgentRole> = new Map();
-  private broadcast: BroadcastFn | null = null;
-  private lastActivity: Map<AgentRole, number> = new Map();
+  private ptys: Map<string, pty.IPty> = new Map();
+  private outputs: Map<string, string> = new Map();
+  private lastActivity: Map<string, number> = new Map();
   private watchdogInterval: NodeJS.Timeout | null = null;
+  private broadcast: BroadcastFn | null = null;
 
   constructor(workspacePath: string) {
     this.workspacePath = workspacePath;
     this.triadDir = path.join(workspacePath, '.triad');
-    // Workaround for node-pty ConPTY console attach failure in headless Electron
     if (process.platform === 'win32' && !process.env.CONPTY_USE_WINPTY) {
       process.env.CONPTY_USE_WINPTY = '1';
     }
-    this.startWatchdog();
   }
 
-  private startWatchdog(): void {
+  setBroadcast(fn: BroadcastFn): void {
+    this.broadcast = fn;
+  }
+
+  private startWatchdog(key: string): void {
+    if (this.watchdogInterval) return;
     this.watchdogInterval = setInterval(() => {
       const now = Date.now();
-      this.ptys.forEach((_, role) => {
-        const last = this.lastActivity.get(role) || now;
-        if (now - last > 120000) { // 2 min no output = stuck
-          console.error(`[CLISpawner] Watchdog: ${role} stuck (no output for ${((now - last)/1000).toFixed(0)}s)`);
-          this.kill(role);
+      this.ptys.forEach((_, k) => {
+        const last = this.lastActivity.get(k) || now;
+        if (now - last > 120000) {
+          console.error(`[CLISpawner] Watchdog: ${k} stuck (no output for ${((now - last) / 1000).toFixed(0)}s)`);
+          this.killByKey(k);
         }
       });
     }, 15000);
@@ -54,154 +61,212 @@ export class CLISpawner {
     if (this.watchdogInterval) { clearInterval(this.watchdogInterval); this.watchdogInterval = null; }
   }
 
-  setBroadcast(fn: BroadcastFn): void {
-    this.broadcast = fn;
+  private stripANSI(text: string): string {
+    return text.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').replace(/\r/g, '');
   }
 
-  spawnOpenCode(role: AgentRole, promptContent: string, modelConfig: ModelConfig): pty.IPty {
+  private locateOpenCodeBinary(): { cmd: string; args: string[] } | null {
+    const npmDir = process.env.APPDATA ? path.join(process.env.APPDATA, 'npm') : '';
+    const exePath = npmDir ? path.join(npmDir, 'node_modules', 'opencode-ai', 'bin', 'opencode.exe') : '';
+    const cmdPath = npmDir ? path.join(npmDir, 'opencode.cmd') : '';
+
+    if (fs.existsSync(exePath)) return { cmd: exePath, args: [] };
+    if (fs.existsSync(cmdPath)) return { cmd: 'cmd.exe', args: ['/c', cmdPath] };
+    return null;
+  }
+
+  async spawnOpenCode(
+    role: AgentRole,
+    promptContent: string,
+    modelConfig: ModelConfig
+  ): Promise<CLISpawnResult> {
     if (!fs.existsSync(this.triadDir)) {
       fs.mkdirSync(this.triadDir, { recursive: true });
     }
 
-    this.agentRoles.set(promptContent.substring(0, 64), role);
+    const binary = this.locateOpenCodeBinary();
+    if (!binary) {
+      return {
+        success: false,
+        output: '',
+        exitCode: null,
+        signalUsed: null,
+        durationMs: 0,
+        error: 'OpenCode CLI not found at %APPDATA%\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe'
+      };
+    }
 
-    const npmDir = process.env.APPDATA
-      ? path.join(process.env.APPDATA, 'npm')
-      : '';
-    const opencodePath = npmDir ? path.join(npmDir, 'node_modules', 'opencode-ai', 'bin', 'opencode.exe') : '';
-    const opencodeShell = npmDir ? path.join(npmDir, 'opencode.cmd') : '';
-    const spawnCmd =
-      process.platform === 'win32' && fs.existsSync(opencodePath) ? opencodePath :
-      process.platform === 'win32' && fs.existsSync(opencodeShell) ? 'cmd.exe' :
-      'opencode';
-    const spawnArgs =
-      spawnCmd === 'cmd.exe' ? ['/c', opencodeShell, 'run', promptContent] :
-      ['run', promptContent];
-    const ptyProcess = pty.spawn(spawnCmd, spawnArgs, {
-      name: 'xterm-color',
-      cols: 120,
-      rows: 30,
-      cwd: this.workspacePath,
-      env: process.env as { [key: string]: string }
-    });
+    // Write full prompt to .triad/builder_prompt.md so opencode reads it as context
+    const promptFile = path.join(this.triadDir, 'builder_prompt.md');
+    fs.writeFileSync(promptFile, promptContent, 'utf-8');
 
-    this.outputs.set(role, '');
-    this.lastActivity.set(role, Date.now());
+    // Short message that tells opencode to read the full prompt from the file
+    const shortMessage = `Read ".triad/builder_prompt.md" which contains your full task instructions. Execute it now.`;
+    const modelId = modelConfig.provider === 'opencode'
+      ? `opencode/${modelConfig.model}`
+      : `${modelConfig.provider}/${modelConfig.model}`;
 
-    ptyProcess.onData((data) => {
-      this.lastActivity.set(role, Date.now());
-      const current = this.outputs.get(role) || '';
-      this.outputs.set(role, current + data);
-      if (this.broadcast) {
-        this.broadcast('agent-output', { role, data, project: path.basename(this.workspacePath) });
+    const sessionId = `triad-${role}`;
+    const key = `${role}-${Date.now()}`;
+    const startTime = Date.now();
+
+    // Build args: --format json for structured output, --thinking for reasoning, --model, --session
+    const args = [
+      ...binary.args,
+      'run',
+      '--format', 'json',
+      '--thinking',
+      '--session', sessionId,
+      '--model', modelId,
+      '--dangerously-skip-permissions',
+      shortMessage
+    ];
+
+    this.emitLog(role, `[CLI] Spawning: opencode --session ${sessionId} --model ${modelId} --format json --thinking`);
+    this.emitLog(role, `[CLI] Prompt file: ${promptFile} (${promptContent.length} chars)`);
+
+    return new Promise<CLISpawnResult>((resolve) => {
+      let resolved = false;
+      const finish = (result: CLISpawnResult) => {
+        if (resolved) return;
+        resolved = true;
+        this.ptys.delete(key);
+        this.outputs.delete(key);
+        this.lastActivity.delete(key);
+        if (this.ptys.size === 0) this.stopWatchdog();
+        resolve(result);
+      };
+
+      let ptyProcess: pty.IPty;
+      try {
+        ptyProcess = pty.spawn(binary.cmd, args, {
+          name: 'xterm-color',
+          cols: 160,
+          rows: 40,
+          cwd: this.workspacePath,
+          env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } as { [key: string]: string }
+        });
+      } catch (e: any) {
+        finish({
+          success: false,
+          output: '',
+          exitCode: null,
+          signalUsed: null,
+          durationMs: Date.now() - startTime,
+          error: `PTY spawn failed: ${e.message}`
+        });
+        return;
       }
-    });
 
-    ptyProcess.onExit(({ exitCode, signal }) => {
-      console.log(`[CLISpawner] ${role} exited (code=${exitCode} signal=${signal})`);
-      this.lastActivity.set(role, 0);
-      // Write captured output to expected .triad/ file so FileBus detects it
-      const outputFile = OUTPUT_FILES[role];
-      const capturedOutput = this.outputs.get(role) || '';
-      if (outputFile && capturedOutput.trim()) {
-        try {
-          const outPath = path.join(this.triadDir, outputFile);
-          fs.writeFileSync(outPath, capturedOutput.trim(), 'utf-8');
-          console.log(`[CLISpawner] Wrote ${outputFile} from ${role} output (${capturedOutput.length} chars)`);
-        } catch (e: any) {
-          console.error(`[CLISpawner] Failed to write ${outputFile}: ${e.message}`);
+      this.ptys.set(key, ptyProcess);
+      this.outputs.set(key, '');
+      this.lastActivity.set(key, Date.now());
+      this.startWatchdog(key);
+
+      ptyProcess.onData((data) => {
+        this.lastActivity.set(key, Date.now());
+        const clean = this.stripANSI(data);
+        const current = this.outputs.get(key) || '';
+        this.outputs.set(key, current + clean);
+
+        // Parse JSON format output if possible, else show raw
+        const lines = clean.split('\n').filter(l => l.trim());
+        for (const line of lines) {
+          // Try to parse as JSON event
+          try {
+            const evt = JSON.parse(line);
+            if (evt.type === 'thinking' && evt.content) {
+              this.emitLog(role, `[CLI THINKING] ${evt.content.toString().substring(0, 250)}`);
+            } else if (evt.type === 'assistant' && evt.content) {
+              this.emitLog(role, `[CLI ASSISTANT] ${evt.content.toString().substring(0, 250)}`);
+            } else if (evt.type === 'tool_call' && evt.name) {
+              this.emitLog(role, `[CLI TOOL] ${evt.name} ${JSON.stringify(evt.input || {}).substring(0, 150)}`);
+            } else if (evt.type === 'tool_result') {
+              const preview = typeof evt.content === 'string' ? evt.content.substring(0, 200) : JSON.stringify(evt.content).substring(0, 200);
+              this.emitLog(role, `[CLI RESULT] ${preview}`);
+            } else if (evt.type === 'error' && evt.message) {
+              this.emitLog(role, `[CLI ERROR] ${evt.message}`);
+            }
+            continue; // handled as JSON
+          } catch {
+            // Not JSON — just raw text
+          }
+          if (line.length > 2) {
+            this.emitLog(role, line.substring(0, 300));
+          }
         }
-      } else if (outputFile === 'done.signal' && exitCode === 0) {
-        // Builder: write empty done.signal on success even if no output
-        try {
-          fs.writeFileSync(path.join(this.triadDir, 'done.signal'), '');
-          console.log(`[CLISpawner] Wrote empty done.signal from ${role}`);
-        } catch (e: any) {}
-      }
-    });
+      });
 
-    this.ptys.set(role, ptyProcess);
-    return ptyProcess;
+      ptyProcess.onExit(({ exitCode, signal }) => {
+        const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+        console.log(`[CLISpawner] ${role} exited (code=${exitCode} signal=${signal}) after ${elapsed}s`);
+
+        const capturedOutput = this.outputs.get(key) || '';
+        const outputFile = OUTPUT_FILES[role];
+
+        if (outputFile && capturedOutput.trim()) {
+          try {
+            fs.writeFileSync(path.join(this.triadDir, outputFile), capturedOutput.trim(), 'utf-8');
+            this.emitLog(role, `[CLI] Wrote ${outputFile} (${capturedOutput.length} chars)`);
+          } catch (e: any) {
+            console.error(`[CLISpawner] Failed to write ${outputFile}: ${e.message}`);
+          }
+        } else if (outputFile === 'done.signal' && exitCode === 0) {
+          try {
+            fs.writeFileSync(path.join(this.triadDir, 'done.signal'), '');
+            this.emitLog(role, '[CLI] Wrote empty done.signal');
+          } catch (e: any) {}
+        }
+
+        finish({
+          success: exitCode === 0,
+          output: capturedOutput.trim(),
+          exitCode: exitCode ?? null,
+          signalUsed: signal ? String(signal) : null,
+          durationMs: Date.now() - startTime
+        });
+      });
+    });
   }
 
-  spawnGemini(role: AgentRole, promptContent: string): pty.IPty {
-    const npmDir = process.env.APPDATA
-      ? path.join(process.env.APPDATA, 'npm')
-      : '';
-    const geminiPath = npmDir
-      ? path.join(npmDir, 'node_modules', '@google', 'gemini-cli', 'bundle', 'gemini.js')
-      : '';
-    const geminiShell = npmDir ? path.join(npmDir, 'gemini.cmd') : '';
-    const cmd = process.platform === 'win32' && fs.existsSync(geminiPath) ? process.execPath :
-      process.platform === 'win32' && fs.existsSync(geminiShell) ? 'cmd.exe' :
-      'gemini';
-    const args = process.platform === 'win32' && fs.existsSync(geminiPath) ? [geminiPath, '--prompt', promptContent] :
-      process.platform === 'win32' && fs.existsSync(geminiShell) ? ['/c', geminiShell, '--prompt', promptContent] :
-      ['--prompt', promptContent];
-    const ptyProcess = pty.spawn(cmd, args, {
-      name: 'xterm-color',
-      cols: 120,
-      rows: 30,
-      cwd: this.workspacePath,
-      env: process.env as { [key: string]: string }
-    });
-
-    this.outputs.set(role, '');
-    this.lastActivity.set(role, Date.now());
-
-    ptyProcess.onData((data) => {
-      this.lastActivity.set(role, Date.now());
-      const current = this.outputs.get(role) || '';
-      this.outputs.set(role, current + data);
-      if (this.broadcast) {
-        this.broadcast('agent-output', { role, data, project: path.basename(this.workspacePath) });
-      }
-    });
-
-    ptyProcess.onExit(({ exitCode, signal }) => {
-      console.log(`[CLISpawner] ${role} exited (code=${exitCode} signal=${signal})`);
-      this.lastActivity.set(role, 0);
-      const outputFile = OUTPUT_FILES[role];
-      const capturedOutput = this.outputs.get(role) || '';
-      if (outputFile && capturedOutput.trim()) {
-        try {
-          fs.writeFileSync(path.join(this.triadDir, outputFile), capturedOutput.trim(), 'utf-8');
-          console.log(`[CLISpawner] Wrote ${outputFile} from ${role} output (${capturedOutput.length} chars)`);
-        } catch (e: any) {
-          console.error(`[CLISpawner] Failed to write ${outputFile}: ${e.message}`);
-        }
-      } else if (outputFile === 'done.signal' && exitCode === 0) {
-        try {
-          fs.writeFileSync(path.join(this.triadDir, 'done.signal'), '');
-          console.log(`[CLISpawner] Wrote empty done.signal from ${role}`);
-        } catch (e: any) {}
-      }
-    });
-
-    this.ptys.set(role, ptyProcess);
-    return ptyProcess;
+  private emitLog(role: string, message: string): void {
+    if (this.broadcast) {
+      const cleanMsg = message.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+      this.broadcast('log', {
+        role,
+        message: `[CLI:${role}] ${cleanMsg}`,
+        project: path.basename(this.workspacePath)
+      });
+    }
   }
 
-  spawnByCLI(cli: CLIType, role: AgentRole, prompt: string, modelConfig?: ModelConfig): pty.IPty | null {
+  spawnByCLI(cli: CLIType, role: AgentRole, prompt: string, modelConfig?: ModelConfig): Promise<CLISpawnResult> {
     switch (cli) {
       case 'opencode':
-        return this.spawnOpenCode(role, prompt, modelConfig || { cli: 'opencode', model: 'deepseek-v4-pro' });
-      case 'gemini':
-        return this.spawnGemini(role, prompt);
       case 'claude-code':
-        console.warn('[CLISpawner] Claude Code CLI not yet implemented, falling back to OpenCode');
-        return this.spawnOpenCode(role, prompt, modelConfig || { cli: 'opencode', model: 'deepseek-v4-pro' });
+        return this.spawnOpenCode(role, prompt, modelConfig || { cli: 'opencode', model: 'deepseek-v4-flash-free' });
       default:
-        console.error(`[CLISpawner] Unknown CLI type: ${cli}`);
-        return null;
+        return Promise.resolve({
+          success: false, output: '', exitCode: null, signalUsed: null, durationMs: 0,
+          error: `Unsupported CLI type: ${cli}`
+        });
     }
   }
 
   kill(role: AgentRole): void {
-    const p = this.ptys.get(role);
+    this.ptys.forEach((p, key) => {
+      if (key.startsWith(role)) {
+        try { p.kill(); } catch (e) {}
+        this.ptys.delete(key);
+      }
+    });
+  }
+
+  private killByKey(key: string): void {
+    const p = this.ptys.get(key);
     if (p) {
       try { p.kill(); } catch (e) {}
-      this.ptys.delete(role);
+      this.ptys.delete(key);
     }
   }
 
@@ -214,25 +279,11 @@ export class CLISpawner {
     this.outputs.clear();
   }
 
-  getOutput(role: AgentRole): string {
-    return this.outputs.get(role) || '';
+  getOutput(key: string): string {
+    return this.outputs.get(key) || '';
   }
 
-  isRunning(role: AgentRole): boolean {
-    return this.ptys.has(role);
-  }
-
-  getActiveRoles(): AgentRole[] {
-    return Array.from(this.ptys.keys());
-  }
-
-  private getExpectedOutput(role: AgentRole): string {
-    const map: Record<AgentRole, string> = {
-      architect: 'plan.md',
-      builder: 'done.signal',
-      reviewer: 'review.md',
-      auditor: 'audit.md'
-    };
-    return map[role];
+  isRunning(): boolean {
+    return this.ptys.size > 0;
   }
 }

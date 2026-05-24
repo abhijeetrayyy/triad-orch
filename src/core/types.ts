@@ -14,7 +14,7 @@ export interface Task {
 
 export interface Ledger {
   global_intent: string;
-  status: 'idle' | 'planning' | 'executing' | 'reviewing' | 'auditing' | 'completed' | 'failed';
+  status: 'idle' | 'planning' | 'executing' | 'reviewing' | 'ui_testing' | 'auditing' | 'completed' | 'failed';
   loop_count: number;
   max_loops: number;
   task_queue: Task[];
@@ -35,19 +35,23 @@ export interface Ledger {
 }
 
 // v2 types
-export type AgentRole = 'architect' | 'builder' | 'reviewer' | 'auditor';
-export type CLIType = 'opencode' | 'gemini' | 'claude-code';
-export type ConductorStatus = 'idle' | 'planning' | 'executing' | 'reviewing' | 'auditing' | 'completed' | 'failed' | 'paused';
-export type TaskQueueStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'awaiting_review' | 'awaiting_audit';
+export type AgentRole = 'architect' | 'builder' | 'reviewer' | 'ui_tester' | 'auditor';
+export type HarnessType = 'opencode' | 'claude-code' | 'codex' | 'gemini' | 'cursor';
+
+export type CLIType = 'opencode' | 'gemini' | 'claude-code' | 'codex' | 'cursor';
+export type ConductorStatus = 'idle' | 'planning' | 'executing' | 'reviewing' | 'ui_testing' | 'auditing' | 'completed' | 'failed' | 'paused';
+export type TaskQueueStatus = 'pending' | 'in_progress' | 'completed' | 'failed' | 'awaiting_review' | 'awaiting_ui_test' | 'awaiting_audit';
 
 export interface ModelConfig {
   cli: CLIType;
   provider?: string;
   model: string;
+  harness?: HarnessType;
   fallback?: {
     cli?: CLIType;
     provider?: string;
     model: string;
+    harness?: HarnessType;
   };
 }
 
@@ -56,6 +60,7 @@ export interface ProjectModelConfig {
   builder: ModelConfig;
   reviewer: ModelConfig;
   auditor: ModelConfig;
+  ui_tester?: ModelConfig;
 }
 
 export interface ConductorState {
@@ -80,20 +85,32 @@ export interface TaskQueueEntry {
   retries: number;
   reviewer_notes: string;
   auditor_notes: string;
+  ui_test_report?: string;
 }
 
-export type TriadFileName = 'intent.md' | 'plan.md' | 'task_queue.json' | 'task_current.md' | 'memory_context.md' | 'model_config.json' | 'state.json' | 'done.signal' | 'review.md' | 'audit.md' | 'fail_signal';
+export interface UITestResultSummary {
+  passed: boolean;
+  totalSteps: number;
+  passedSteps: number;
+  failedSteps: number;
+  errorSteps: number;
+  durationMs: number;
+  brief: string;
+}
+
+export type TriadFileName = 'intent.md' | 'plan.md' | 'task_queue.json' | 'task_current.md' | 'memory_context.md' | 'model_config.json' | 'state.json' | 'done.signal' | 'review.md' | 'ui_test_spec.md' | 'ui_test_report.md' | 'audit.md' | 'fail_signal';
 
 export const TRIAD_FILES: TriadFileName[] = [
   'intent.md', 'plan.md', 'task_queue.json', 'task_current.md',
   'memory_context.md', 'model_config.json', 'state.json',
-  'done.signal', 'review.md', 'audit.md', 'fail_signal'
+  'done.signal', 'review.md', 'ui_test_spec.md', 'ui_test_report.md', 'audit.md', 'fail_signal'
 ];
 
 export const EXPECTED_AGENT_OUTPUTS: Record<AgentRole, TriadFileName[]> = {
   architect: ['plan.md'],
-  builder: ['done.signal'],
+  builder: ['done.signal', 'ui_test_spec.md'],
   reviewer: ['review.md'],
+  ui_tester: ['ui_test_report.md'],
   auditor: ['audit.md']
 };
 
@@ -132,9 +149,45 @@ export interface Checkpoint {
   interrupted_model?: string;
 }
 
+export interface ProgressReport {
+  sessionId: string;
+  projectName: string;
+  startedAt: string;
+  completedAt?: string;
+  totalTasks: number;
+  completedTasks: number;
+  failedTasks: number;
+  skippedTasks: number;
+  totalRetries: number;
+  totalLoopCount: number;
+  problemsEncountered: ProblemLogEntry[];
+  problemsResolved: number;
+  stagesVisited: Record<string, number>;
+  intentSatisfied: boolean;
+  summary: string;
+}
+
+export interface ProblemLogEntry {
+  taskId: string;
+  stage: AgentRole;
+  issue: string;
+  timestamp: string;
+  resolved: boolean;
+  resolution?: string;
+}
+
+export interface StageDecision {
+  nextStage: AgentRole;
+  action: 'proceed' | 'targeted_fix' | 'full_retry' | 're_plan' | 'skip' | 'complete' | 'fail_task' | 'pause';
+  reason: string;
+  retryDelayMs?: number;
+  targetedIssue?: string;
+}
+
 export const DEFAULT_MODEL_CONFIG: ProjectModelConfig = {
-  architect: { cli: 'opencode', provider: 'opencode', model: 'deepseek-v4-flash-free' },
-  builder: { cli: 'opencode', provider: 'opencode', model: 'deepseek-v4-flash-free' },
-  reviewer: { cli: 'opencode', provider: 'opencode', model: 'deepseek-v4-flash-free' },
-  auditor: { cli: 'opencode', provider: 'opencode', model: 'deepseek-v4-flash-free' }
+  architect: { cli: 'opencode', harness: 'opencode', provider: 'opencode', model: 'deepseek-v4-flash-free', fallback: { provider: 'openrouter', model: 'deepseek/deepseek-chat:free' } },
+  builder: { cli: 'opencode', harness: 'opencode', provider: 'opencode', model: 'deepseek-v4-flash-free', fallback: { provider: 'openrouter', model: 'deepseek/deepseek-chat:free' } },
+  reviewer: { cli: 'opencode', harness: 'opencode', provider: 'opencode', model: 'deepseek-v4-flash-free', fallback: { provider: 'openrouter', model: 'deepseek/deepseek-chat:free' } },
+  auditor: { cli: 'opencode', harness: 'opencode', provider: 'opencode', model: 'deepseek-v4-flash-free', fallback: { provider: 'openrouter', model: 'deepseek/deepseek-chat:free' } },
+  ui_tester: { cli: 'opencode', harness: 'opencode', provider: 'opencode', model: 'deepseek-v4-flash-free', fallback: { provider: 'openrouter', model: 'deepseek/deepseek-chat:free' } }
 };

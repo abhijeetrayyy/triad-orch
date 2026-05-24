@@ -85,30 +85,25 @@ export async function callModel(
   model: string,
   prompt: string,
   systemPrompt: string = "You are a helpful assistant.",
-  base64Image?: string
+  base64Image?: string,
+  signal?: AbortSignal
 ) {
   const baseUrl = PROVIDERS[provider];
+  const endpoint = `${baseUrl}/chat/completions`;
+  console.log(`[Model] Calling ${provider}/${model} at ${endpoint}`);
   const keyCandidates = KEY_FALLBACKS[provider] || [];
 
   if (keyCandidates.length === 0) throw new Error(`API Key for ${provider} missing.`);
 
-  const messages: any[] = [{ role: 'system', content: systemPrompt }];
-  if (base64Image) {
-    messages.push({
-      role: 'user',
-      content: [
-        { type: 'text', text: prompt },
-        { type: 'image_url', image_url: { url: `data:image/png;base64,${base64Image}` } }
-      ]
-    });
-  } else {
-    messages.push({ role: 'user', content: prompt });
-  }
+  const isDeepSeekModel = model.startsWith('deepseek');
+  const messages: any[] = isDeepSeekModel
+    ? [{ role: 'user', content: `[SYSTEM INSTRUCTIONS]\n${systemPrompt}\n\n[USER TASK]\n${prompt}` }]
+    : [{ role: 'system', content: systemPrompt }, { role: 'user', content: prompt }];
 
   let lastError: any;
   for (const apiKey of keyCandidates) {
     try {
-      const response = await axios.post(`${baseUrl}/chat/completions`, {
+      const response = await axios.post(endpoint, {
         model: model,
         messages: messages,
         stream: false
@@ -117,12 +112,13 @@ export async function callModel(
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json'
         },
-        timeout: 60000
+        timeout: 60000,
+        signal
       });
       return response.data.choices[0].message.content;
     } catch (error: any) {
       lastError = error;
-      if (error.response?.status !== 401) throw error;
+      if (error.response?.status !== 401 && error.response?.status !== 429) throw error;
     }
   }
   throw lastError || new Error(`All API keys for ${provider} failed.`);

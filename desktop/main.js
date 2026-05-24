@@ -138,13 +138,23 @@ ipcMain.handle('pause-project', async (event, name) => {
 });
 
 ipcMain.handle('resume-project', async (event, name, newModelConfig) => {
-  const conductor = conductors.get(name);
-  if (conductor) {
-    if (newModelConfig) {
-      // Apply model config changes before resume
-      const db = require('../src/core/database').db;
-      db.upsertProject(name, undefined, undefined, undefined, undefined, JSON.stringify(newModelConfig));
-    }
+  let conductor = conductors.get(name);
+  // If no active conductor (restart scenario), create one and load from checkpoint
+  if (!conductor) {
+    const workspacePath = ensureProjectDir(name);
+    conductor = new Conductor(name, workspacePath);
+    conductor.setBroadcast((eventName, data) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('conductor-event', { event: eventName, data });
+      }
+    });
+    conductors.set(name, conductor);
+  }
+  if (newModelConfig) {
+    const db = require('../src/core/database').db;
+    db.upsertProject(name, undefined, undefined, undefined, undefined, JSON.stringify(newModelConfig));
+  }
+  try {
     await conductor.resume();
     // Update checkpoint
     const projectDir = path.join(__dirname, '..', 'projects', name);
@@ -165,8 +175,10 @@ ipcMain.handle('resume-project', async (event, name, newModelConfig) => {
       });
     }
     return { success: true };
+  } catch (err) {
+    console.error(`[Main] Failed to resume conductor for ${name}:`, err.message);
+    return { success: false, error: err.message };
   }
-  return { success: false, error: 'No active conductor found' };
 });
 
 ipcMain.handle('get-project-state', async (event, name) => {
